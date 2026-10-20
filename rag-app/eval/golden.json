@@ -1,0 +1,22 @@
+[
+  {"input": "Who founded Nimbus Coffee and when?",
+   "expected_output": "Nimbus Coffee Co. was founded in 2014 by siblings Lena and Marco Albrecht in Portland, Oregon."},
+  {"input": "How much is a 16 oz latte?",
+   "expected_output": "A 16 oz latte costs $5.75."},
+  {"input": "What is in the Cumulus Latte and does oat milk cost extra?",
+   "expected_output": "The Cumulus Latte has honey, cardamom, and oat milk. Oat milk is the default in it, so there is no extra charge."},
+  {"input": "What time do cafés open on Sunday?",
+   "expected_output": "Cafés open at 7:30 AM on Sunday and close at 4:00 PM."},
+  {"input": "How many drops do I need for a free drink in Cloud Club?",
+   "expected_output": "You need 100 drops for a free drink of any size."},
+  {"input": "Is shipping free?",
+   "expected_output": "Shipping is free on orders over $45 within the United States; otherwise standard shipping is $6.95."},
+  {"input": "I opened a bag and didn't like it. What can I do?",
+   "expected_output": "Under the Happy Cup Guarantee, contact support within 14 days and Nimbus will send a different coffee of equal value for free (one time)."},
+  {"input": "What are the tasting notes of the Ethiopian coffee?",
+   "expected_output": "Altocumulus (Ethiopia Yirgacheffe) has notes of jasmine, lemon zest, and bergamot."},
+  {"input": "What coffee-to-water ratio do you recommend for a V60 pour-over?",
+   "expected_output": "Use 22 g of coffee to 350 g of water, about a 1:16 ratio, at 94°C."},
+  {"input": "What is the minimum price Nimbus pays farmers for coffee?",
+   "expected_output": "Nimbus pays a minimum of $4.00 per pound FOB."}
+]
