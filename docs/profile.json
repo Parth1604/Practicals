@@ -1,0 +1,26 @@
+{
+  "learner": "Parth",
+  "updated": "2026-11-20",
+  "goal": "AI engineer: LangChain, LangGraph, RAG, agentic systems, MLflow, observability and evals",
+  "known": [
+    "langchain-vs-langgraph", "langgraph-state", "rag-chunking", "tools-docstring",
+    "react-pattern", "checkpointing", "supervisor-pattern", "observability-lanes",
+    "mlflow-tracing", "lcel"
+  ],
+  "struggled_with": [
+    "langchain-vs-langgraph (initially felt too abstract — needs concrete analogies)",
+    "connecting chains, agents, multi-agent into one mental model"
+  ],
+  "next": [
+    "send-fanout", "reducers", "interrupt", "memory-store", "rag-eval",
+    "hybrid-search", "prompt-versioning", "structured-output",
+    "langgraph-platform-deploy", "deep-agents-pattern", "eval-datasets-in-ci",
+    "model-routing-for-cost", "guardrails", "token-cost-tracking"
+  ],
+  "stack": ["LangChain", "LangGraph", "LangSmith", "DeepEval", "MLflow", "Databricks/PySpark"],
+  "style": "visual, one idea per card, concrete analogies, short code over prose, quizzes to check understanding",
+  "feedback": {
+    "note": "The app stores swipes/quiz results in localStorage. Until a backend exists, paste the exported JSON here under feedback_log and the nightly job will read it.",
+    "feedback_log": []
+  }
+}

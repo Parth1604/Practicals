@@ -1,0 +1,310 @@
+{
+  "date": "2026-11-21",
+  "generated_by": "hand-seeded",
+  "cards": [
+    {
+      "id": "2026-11-21-01",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "langchain-vs-langgraph",
+      "title": "LangChain is the bricks. LangGraph is the wiring.",
+      "body": "LangChain gives an LLM memory, tools and the ability to do things in sequence. LangGraph decides *who does what, in what order, and what happens when something goes wrong*. You don't pick one — LangGraph is built on top of LangChain.",
+      "why": "Every architecture decision you make starts with: is this a straight line (chain) or does it need to loop and branch (graph)?",
+      "diagram": {
+        "direction": "row",
+        "nodes": [
+          { "id": "a", "label": "Prompt" },
+          { "id": "b", "label": "LLM" },
+          { "id": "c", "label": "Parser" }
+        ],
+        "edges": [["a", "b"], ["b", "c"]],
+        "caption": "LangChain: A → B → C, no loops"
+      }
+    },
+    {
+      "id": "2026-11-21-02",
+      "bucket": "reinforce",
+      "type": "diagram",
+      "topic": "langgraph-state",
+      "title": "State is the relay baton.",
+      "body": "Every node picks up the State, does its work, and passes it on. Nodes never talk to each other directly — they only read from and write to State. That's why a LangGraph graph is easy to debug: look at the baton between steps.",
+      "diagram": {
+        "direction": "row",
+        "nodes": [
+          { "id": "s", "label": "START", "kind": "terminal" },
+          { "id": "r", "label": "retrieve" },
+          { "id": "g", "label": "generate" },
+          { "id": "e", "label": "END", "kind": "terminal" }
+        ],
+        "edges": [["s", "r"], ["r", "g"], ["g", "e"]],
+        "caption": "State flows along every edge"
+      },
+      "code": {
+        "lang": "python",
+        "src": "class State(TypedDict):\n    question: str\n    docs: list[str]\n    answer: str\n\ndef retrieve(state: State) -> dict:\n    return {\"docs\": search(state[\"question\"])}"
+      }
+    },
+    {
+      "id": "2026-11-21-03",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "rag-chunking",
+      "title": "Why does chunk_overlap exist?",
+      "quiz": {
+        "question": "You split a PDF into 1000-char chunks with chunk_overlap=200. What does the overlap buy you?",
+        "options": [
+          "Faster embedding because chunks share text",
+          "Context that straddles a chunk boundary isn't lost",
+          "Smaller vector store",
+          "Deterministic chunk IDs"
+        ],
+        "answer": 1,
+        "explain": "If chunk 1 ends mid-sentence, the 200 chars of overlap mean chunk 2 still carries that sentence. Without it, the answer to a question can be sliced in half and neither chunk retrieves well."
+      }
+    },
+    {
+      "id": "2026-11-21-04",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "tools-docstring",
+      "title": "The docstring IS the tool description.",
+      "body": "With `@tool`, the LLM never sees your Python. It sees the function name, the argument types and the docstring. A vague docstring = a tool that gets called at the wrong time, or never.",
+      "code": {
+        "lang": "python",
+        "src": "from langchain_core.tools import tool\n\n@tool\ndef lookup_order(order_id: str) -> str:\n    \"\"\"Return shipping status for an order.\n    Use ONLY when the user gives an order ID\n    like ORD-12345.\"\"\"\n    return db.status(order_id)"
+      },
+      "why": "Most 'my agent won't use the tool' bugs are docstring bugs."
+    },
+    {
+      "id": "2026-11-21-05",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "react-pattern",
+      "title": "ReAct = Reason, Act, Observe, repeat.",
+      "body": "The agent writes a thought, picks a tool, reads the result, and loops until it decides it has an answer. In LangGraph this is literally a cycle: `agent → tools → agent`, with a conditional edge that exits when there are no more tool calls.",
+      "diagram": {
+        "direction": "row",
+        "nodes": [
+          { "id": "a", "label": "agent" },
+          { "id": "t", "label": "tools" },
+          { "id": "e", "label": "END", "kind": "terminal" }
+        ],
+        "edges": [["a", "t"], ["t", "a"], ["a", "e"]],
+        "caption": "The loop that makes it an agent"
+      }
+    },
+    {
+      "id": "2026-11-21-06",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "checkpointing",
+      "title": "A checkpointer turns a graph into something that can pause.",
+      "body": "Add `checkpointer=MemorySaver()` (or Postgres in prod) and every node's output is saved per `thread_id`. That gives you: resume after a crash, multi-turn memory, time-travel debugging, and human-in-the-loop interrupts.",
+      "code": {
+        "lang": "python",
+        "src": "graph = builder.compile(\n    checkpointer=MemorySaver(),\n    interrupt_before=[\"send_email\"],\n)\nconfig = {\"configurable\": {\"thread_id\": \"user-42\"}}\ngraph.invoke(state, config)   # pauses before send_email\ngraph.invoke(None, config)    # resumes after approval"
+      },
+      "why": "Checkpoint history is also your audit log — this is why regulated teams pick LangGraph."
+    },
+    {
+      "id": "2026-11-21-07",
+      "bucket": "reinforce",
+      "type": "diagram",
+      "topic": "supervisor-pattern",
+      "title": "Supervisor + workers.",
+      "body": "One supervisor node reads State and routes to a specialist (researcher, coder, writer). Each worker does its job and returns control to the supervisor, which decides: another worker, or END.",
+      "diagram": {
+        "direction": "col",
+        "nodes": [
+          { "id": "sup", "label": "supervisor" },
+          { "id": "w1", "label": "researcher" },
+          { "id": "w2", "label": "coder" },
+          { "id": "w3", "label": "writer" }
+        ],
+        "edges": [["sup", "w1"], ["sup", "w2"], ["sup", "w3"], ["w1", "sup"], ["w2", "sup"], ["w3", "sup"]],
+        "caption": "Conditional edge from supervisor picks the worker"
+      }
+    },
+    {
+      "id": "2026-11-21-08",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "observability-lanes",
+      "title": "LangSmith vs DeepEval — who does what?",
+      "quiz": {
+        "question": "You want tracing AND RAG quality tests without the two fighting. Which split keeps it clean?",
+        "options": [
+          "LangSmith for traces, DeepEval in pytest for faithfulness/relevancy — never enable DeepEval's tracer",
+          "DeepEval for everything, drop LangSmith",
+          "Both tracers on, compare the dashboards",
+          "LangSmith evals only, DeepEval is redundant"
+        ],
+        "answer": 0,
+        "explain": "Separate lanes: LangSmith sees every run live; DeepEval scores a small golden set on demand. Two tracers at once doubles the noise and the API keys."
+      }
+    },
+    {
+      "id": "2026-11-21-09",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "mlflow-tracing",
+      "title": "One line of MLflow for agent traces.",
+      "body": "If you already live in MLflow for data work, you don't need a new observability tool to start. Autolog hooks LangChain's callback system and shows each chain/tool call as a span in the UI you already know.",
+      "code": {
+        "lang": "python",
+        "src": "import mlflow\nmlflow.langchain.autolog()\n\nwith mlflow.start_run():\n    result = graph.invoke({\"question\": q}, config)"
+      }
+    },
+    {
+      "id": "2026-11-21-10",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "lcel",
+      "title": "The pipe is just function composition.",
+      "body": "`prompt | llm | parser` builds a Runnable. Each `|` passes the output of the left into the input of the right — exactly like a Unix pipe. Everything in LCEL is a Runnable, so a whole chain can be one step inside a bigger chain, or one node inside a graph.",
+      "code": {
+        "lang": "python",
+        "src": "chain = prompt | llm | StrOutputParser()\nchain.invoke({\"topic\": \"vector DBs\"})\n\n# batch and stream come free\nchain.batch([{\"topic\": \"RAG\"}, {\"topic\": \"agents\"}])"
+      }
+    },
+    {
+      "id": "2026-11-21-11",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "send-fanout",
+      "title": "Send() — the map step of map-reduce in LangGraph.",
+      "body": "A conditional edge can return a *list* of `Send(node, payload)` objects. LangGraph then runs that node once per payload, in parallel, and a reducer on State merges the results. This is how deep-research agents fan out to N searchers.",
+      "code": {
+        "lang": "python",
+        "src": "from langgraph.types import Send\n\ndef fan_out(state):\n    return [Send(\"search\", {\"q\": q})\n            for q in state[\"subquestions\"]]\n\nbuilder.add_conditional_edges(\"plan\", fan_out)"
+      },
+      "why": "Your AIgram generator will use exactly this: one planner, fifty parallel writers."
+    },
+    {
+      "id": "2026-11-21-12",
+      "bucket": "next",
+      "type": "code",
+      "topic": "reducers",
+      "title": "Reducers decide how parallel writes merge.",
+      "body": "When two nodes write the same State key at once, LangGraph needs a rule. `Annotated[list, operator.add]` means append. Without a reducer, the last writer wins — or you get an InvalidUpdateError.",
+      "code": {
+        "lang": "python",
+        "src": "import operator\nfrom typing import Annotated\n\nclass State(TypedDict):\n    results: Annotated[list[str], operator.add]\n    # each Send() worker returns {\"results\": [one]}\n    # they all append instead of overwriting"
+      }
+    },
+    {
+      "id": "2026-11-21-13",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "interrupt",
+      "title": "interrupt() pauses from *inside* a node.",
+      "body": "`interrupt_before` pauses at a node boundary. `interrupt(payload)` pauses mid-node, surfaces the payload to a human, and resumes with their answer via `Command(resume=...)`. Use it for approvals, clarifying questions, and 'are you sure?' gates.",
+      "code": {
+        "lang": "python",
+        "src": "from langgraph.types import interrupt, Command\n\ndef draft_email(state):\n    ok = interrupt({\"draft\": state[\"email\"]})\n    if not ok:\n        return {\"status\": \"rejected\"}\n    send(state[\"email\"])\n\n# later, from the UI:\ngraph.invoke(Command(resume=True), config)"
+      }
+    },
+    {
+      "id": "2026-11-21-14",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "memory-store",
+      "title": "Checkpoints are short-term. Store is long-term.",
+      "body": "A checkpointer remembers *this thread*. The `BaseStore` (InMemoryStore, PostgresStore) remembers *across* threads — user preferences, facts, past decisions — keyed by namespace. Nodes get it via the `store` argument.",
+      "code": {
+        "lang": "python",
+        "src": "def recall(state, *, store):\n    items = store.search((\"user\", uid), query=state[\"question\"])\n    return {\"memories\": [i.value for i in items]}\n\ngraph = builder.compile(checkpointer=saver, store=store)"
+      },
+      "why": "Thread memory vs cross-thread memory is a very common interview question."
+    },
+    {
+      "id": "2026-11-21-15",
+      "bucket": "next",
+      "type": "quiz",
+      "topic": "rag-eval",
+      "title": "Faithfulness vs answer relevancy.",
+      "quiz": {
+        "question": "Your RAG answer is fluent and on-topic but states a date that isn't in any retrieved chunk. Which metric drops?",
+        "options": ["Answer relevancy", "Faithfulness", "Contextual recall", "Latency"],
+        "answer": 1,
+        "explain": "Faithfulness checks whether every claim is supported by the retrieved context. Relevancy only asks whether the answer addresses the question — a hallucinated date can still be perfectly relevant."
+      }
+    },
+    {
+      "id": "2026-11-21-16",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "hybrid-search",
+      "title": "Vectors miss exact tokens. BM25 misses meaning. Use both.",
+      "body": "Embedding search fails on part numbers, error codes and names (`ORD-12345`, `E0421`). Keyword search fails on paraphrase. Hybrid retrieval runs both and fuses the rankings (Reciprocal Rank Fusion). Most production RAG is hybrid.",
+      "diagram": {
+        "direction": "col",
+        "nodes": [
+          { "id": "q", "label": "query" },
+          { "id": "v", "label": "vector top-k" },
+          { "id": "b", "label": "BM25 top-k" },
+          { "id": "f", "label": "RRF fuse → rerank" }
+        ],
+        "edges": [["q", "v"], ["q", "b"], ["v", "f"], ["b", "f"]]
+      }
+    },
+    {
+      "id": "2026-11-21-17",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "prompt-versioning",
+      "title": "Prompts are code. Version them like code.",
+      "body": "MLflow's prompt registry (`mlflow.genai.register_prompt`) and LangSmith's prompt hub both give you: a version number, a diff, and the ability to pin production to v7 while you test v8. A prompt edited in a notebook and not committed is a silent production change.",
+      "code": {
+        "lang": "python",
+        "src": "import mlflow\nmlflow.genai.register_prompt(\n    name=\"rag-answer\",\n    template=\"Answer using only: {{context}}\\nQ: {{question}}\",\n)\np = mlflow.genai.load_prompt(\"prompts:/rag-answer@production\")"
+      }
+    },
+    {
+      "id": "2026-11-21-18",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "structured-output",
+      "title": "with_structured_output() beats parsing JSON by hand.",
+      "body": "Give the model a Pydantic class and LangChain uses the provider's native tool-calling/JSON mode to return a validated object. No regex, no 'please respond in JSON' begging, and a typed State field at the other end.",
+      "code": {
+        "lang": "python",
+        "src": "class Verdict(BaseModel):\n    is_duplicate: bool\n    reason: str\n\ncritic = llm.with_structured_output(Verdict)\nv: Verdict = critic.invoke(card_text)"
+      },
+      "why": "Your AIgram critic node is exactly this."
+    },
+    {
+      "id": "2026-11-21-19",
+      "bucket": "fresh",
+      "type": "concept",
+      "topic": "aigram-architecture",
+      "title": "This feed is a LangGraph graph.",
+      "body": "Planner reads your profile and picks ~50 topics across reinforce / next / fresh. A Send() fan-out writes one card per topic in parallel. A critic with structured output rejects duplicates and shallow cards. The survivors become tomorrow's JSON.",
+      "diagram": {
+        "direction": "row",
+        "nodes": [
+          { "id": "p", "label": "profile" },
+          { "id": "pl", "label": "planner" },
+          { "id": "w", "label": "writers ×N" },
+          { "id": "c", "label": "critic" },
+          { "id": "f", "label": "feed.json" }
+        ],
+        "edges": [["p", "pl"], ["pl", "w"], ["w", "c"], ["c", "f"]]
+      },
+      "why": "Every concept in today's deck is a node in the thing that made today's deck."
+    },
+    {
+      "id": "2026-11-21-20",
+      "bucket": "fresh",
+      "type": "quiz",
+      "topic": "aigram-architecture",
+      "title": "Which LangGraph feature powers the writers?",
+      "quiz": {
+        "question": "Fifty cards need writing in parallel from one planner. Which primitive does that?",
+        "options": ["interrupt()", "Send()", "MemorySaver", "add_edge in a for-loop"],
+        "answer": 1,
+        "explain": "Send() returns one unit of work per topic; LangGraph schedules them concurrently and a reducer appends the results. A for-loop of add_edge would run them in sequence."
+      }
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AIgram</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="description" content="A daily swipe feed of AI-engineering micro-lessons.">
+<meta name="theme-color" content="#0b0d12">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="AIgram">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo"></span>AIgram</div>
+  <div class="meta"><span id="date"></span> · <span id="progress">0/0</span></div>
+</header>
+
+<main id="feed" class="feed" aria-live="polite">
+  <section class="card loading"><div class="inner"><p class="muted">Loading today's feed…</p></div></section>
+</main>
+
+<div id="install-hint" class="hint" hidden>
+  <strong>Add to Home Screen</strong> for the full-screen app: tap <span class="share">⎋</span> Share → “Add to Home Screen”.
+  <button id="hint-close" aria-label="Dismiss">×</button>
+</div>
+
+<nav class="bottom">
+  <button id="btn-export" title="Copy your swipe & quiz log">Export log</button>
+  <span id="status" class="muted"></span>
+</nav>
+
+<script src="app.js"></script>
+</body>
+</html>
