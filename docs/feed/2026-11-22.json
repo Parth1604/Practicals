@@ -1,0 +1,498 @@
+{
+  "date": "2026-11-22",
+  "generated_by": "nightly-task",
+  "cards": [
+    {
+      "id": "2026-11-22-01",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "langchain-vs-langgraph",
+      "title": "Reach for LangGraph the moment you need a loop.",
+      "body": "A LangChain chain is a one-way street: prompt → model → parser, done. The moment your flow needs to *go back* — retry a tool, re-plan, ask the user — you need a cycle, and chains can't cycle. LangGraph is a state machine, so cycles are the default, not a hack.",
+      "why": "Interview answer in one line: 'Chains are DAGs, graphs can loop.' That is the whole reason LangGraph exists."
+    },
+    {
+      "id": "2026-11-22-02",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "langgraph-state",
+      "title": "Nodes return only the keys they changed.",
+      "body": "A node never returns the whole State. It returns a partial dict and LangGraph merges it in. Untouched keys survive. This keeps nodes small and makes it obvious what each one is responsible for.",
+      "why": "Returning the full state is the #1 beginner bug: you silently overwrite work done by other nodes.",
+      "code": {
+        "lang": "python",
+        "src": "class State(TypedDict):\n    question: str\n    docs: list[str]\n    answer: str\n\ndef generate(state: State) -> dict:\n    # touches ONLY \"answer\"; question and docs are untouched\n    return {\"answer\": llm.invoke(state[\"docs\"])}"
+      }
+    },
+    {
+      "id": "2026-11-22-03",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "rag-chunking",
+      "title": "Bigger chunks are not always better.",
+      "body": "Chunk size is a trade-off between *context* and *precision*. Pick the quiz option that explains the real failure mode.",
+      "quiz": {
+        "question": "You raise chunk_size from 500 to 4000 chars. Retrieval recall@5 goes UP but answer quality goes DOWN. Most likely cause?",
+        "options": [
+          "The embedding model can't embed long text",
+          "Each chunk now mixes several topics, so the embedding is a blurry average and the LLM gets padded with irrelevant text",
+          "The vector store runs out of memory",
+          "Overlap is now too small relative to chunk size"
+        ],
+        "answer": 1,
+        "explain": "One vector has to represent the whole chunk. A 4000-char chunk covering three topics gets an averaged embedding that matches many queries weakly, and the retrieved text buries the useful sentence in noise. Smaller, topic-coherent chunks give sharper vectors — then use parent-document retrieval if you need more context at generation time."
+      }
+    },
+    {
+      "id": "2026-11-22-04",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "tools-docstring",
+      "title": "Describe the *arguments*, not just the tool.",
+      "body": "The docstring tells the model *when* to call the tool. Field descriptions on an `args_schema` tell it *how* to fill each argument. Skip them and the model guesses units, formats and defaults.",
+      "why": "Most 'the agent called the tool wrong' bugs are missing argument descriptions, not model weakness.",
+      "code": {
+        "lang": "python",
+        "src": "from pydantic import BaseModel, Field\nfrom langchain_core.tools import tool\n\nclass Args(BaseModel):\n    city: str = Field(description=\"City name, e.g. 'London'\")\n    unit: str = Field(\"c\", description=\"'c' or 'f'\")\n\n@tool(args_schema=Args)\ndef weather(city: str, unit: str = \"c\") -> str:\n    \"\"\"Current weather for a city. Use for any weather question.\"\"\"\n    return fetch(city, unit)"
+      }
+    },
+    {
+      "id": "2026-11-22-05",
+      "bucket": "reinforce",
+      "type": "diagram",
+      "topic": "react-pattern",
+      "title": "ReAct is a loop with one exit.",
+      "body": "The model thinks, picks a tool, sees the result, and decides again. The *only* way out is the model answering without a tool call. Everything else routes back to the model.",
+      "why": "When an agent 'runs forever', it's this loop missing a recursion_limit or a stop condition.",
+      "diagram": {
+        "direction": "row",
+        "nodes": [
+          {
+            "id": "s",
+            "label": "START",
+            "kind": "terminal"
+          },
+          {
+            "id": "m",
+            "label": "model"
+          },
+          {
+            "id": "t",
+            "label": "tools"
+          },
+          {
+            "id": "e",
+            "label": "END",
+            "kind": "terminal"
+          }
+        ],
+        "edges": [
+          [
+            "s",
+            "m"
+          ],
+          [
+            "m",
+            "t"
+          ],
+          [
+            "t",
+            "m"
+          ],
+          [
+            "m",
+            "e"
+          ]
+        ],
+        "caption": "model→tools→model until the model answers with no tool call"
+      }
+    },
+    {
+      "id": "2026-11-22-06",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "checkpointing",
+      "title": "thread_id is the key to your saved game.",
+      "body": "A checkpointer saves State after every step, keyed by `thread_id`. Same thread_id = resume the conversation. New thread_id = fresh start. The graph code doesn't change — only the config does.",
+      "why": "This is how one deployed graph serves thousands of users: one thread per user/session.",
+      "code": {
+        "lang": "python",
+        "src": "from langgraph.checkpoint.memory import InMemorySaver\n\napp = builder.compile(checkpointer=InMemorySaver())\ncfg = {\"configurable\": {\"thread_id\": \"user-42\"}}\n\napp.invoke({\"messages\": [(\"user\", \"hi, I'm Parth\")]}, cfg)\napp.invoke({\"messages\": [(\"user\", \"what's my name?\")]}, cfg)  # remembers"
+      }
+    },
+    {
+      "id": "2026-11-22-07",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "supervisor-pattern",
+      "title": "Supervisor or handoff? Depends on who decides next.",
+      "body": "Two multi-agent shapes: a *supervisor* routes every turn from the centre; *handoffs* (swarm) let each agent pass control directly to a peer.",
+      "quiz": {
+        "question": "Your three specialist agents each need to decide, mid-task, which colleague should take over — and you want to avoid a round trip to a central router each time. Which shape?",
+        "options": [
+          "Supervisor: all routing through one node",
+          "Handoffs: each agent returns Command(goto=peer)",
+          "A single ReAct agent with all tools merged",
+          "Sequential chain of the three agents"
+        ],
+        "answer": 1,
+        "explain": "Handoffs push the routing decision to the agent that has the context. Supervisors are better when you want one place to audit and control routing (and one place to add guardrails). Pick by *who should decide*, not by fashion."
+      }
+    },
+    {
+      "id": "2026-11-22-08",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "observability-lanes",
+      "title": "Tracing answers 'what happened'. Evals answer 'was it good'.",
+      "body": "A trace is a recording of one run: prompts, tool calls, latency, tokens. An eval is a judgement over many runs against expectations. LangSmith/MLflow own the recording; DeepEval/LangSmith evaluators own the judging. Keep the two in separate lanes and they stop fighting.",
+      "why": "Mixing them is why eval code ends up in production handlers. Record in prod, judge offline (or sample online)."
+    },
+    {
+      "id": "2026-11-22-09",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "mlflow-tracing",
+      "title": "@mlflow.trace turns any function into a span.",
+      "body": "Autolog traces the LLM calls. `@mlflow.trace` adds *your* functions — retrievers, rerankers, post-processors — as spans in the same tree, so the trace shows the whole pipeline, not just the model.",
+      "why": "Without it, 'retrieval took 3s' is invisible: you only see the LLM span.",
+      "code": {
+        "lang": "python",
+        "src": "import mlflow\nmlflow.langchain.autolog()\n\n@mlflow.trace(span_type=\"RETRIEVER\")\ndef retrieve(q: str) -> list[str]:\n    return store.similarity_search(q, k=5)\n\n@mlflow.trace\ndef answer(q: str) -> str:\n    return chain.invoke({\"q\": q, \"docs\": retrieve(q)})"
+      }
+    },
+    {
+      "id": "2026-11-22-10",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "lcel",
+      "title": "A dict inside a chain runs in parallel.",
+      "body": "In LCEL, a plain `{\"a\": r1, \"b\": r2}` placed in a chain becomes a `RunnableParallel`: both branches get the same input, run concurrently, and their outputs are collected into one dict.",
+      "quiz": {
+        "question": "chain = {\"ctx\": retriever, \"q\": RunnablePassthrough()} | prompt | llm. What does the prompt receive?",
+        "options": [
+          "Only the retriever output",
+          "A dict with keys ctx (docs) and q (the original input)",
+          "A list [docs, input]",
+          "Whatever the LLM returns"
+        ],
+        "answer": 1,
+        "explain": "The dict is the fan-out step of RAG: retriever and passthrough both receive the question, run in parallel, and the prompt gets {ctx: [...docs], q: question}. It's the LCEL way to do what a two-node LangGraph with a reducer would do."
+      }
+    },
+    {
+      "id": "2026-11-22-11",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "agent-ladder",
+      "title": "Chain → agent → multi-agent is one ladder, not three ideas.",
+      "body": "A *chain* is fixed steps. An *agent* is a chain where the model chooses the next step (tool or finish). A *multi-agent* system is an agent whose 'tools' are other agents. Each rung just moves one more decision from your code into the model.",
+      "why": "This is the mental model that unifies them: ask 'who decides the next step — my code or the model?' and you know which rung you're on."
+    },
+    {
+      "id": "2026-11-22-12",
+      "bucket": "reinforce",
+      "type": "diagram",
+      "topic": "langgraph-state",
+      "title": "Conditional edges are if-statements drawn as arrows.",
+      "body": "A conditional edge is a plain function that reads State and returns the name of the next node. The graph picture is just that function made visible.",
+      "why": "Draw the routing function as edges and you can explain any agent on a whiteboard in 30 seconds.",
+      "code": {
+        "lang": "python",
+        "src": "def route(state: State) -> str:\n    return \"answer\" if state[\"relevant\"] else \"rewrite_query\"\n\nbuilder.add_conditional_edges(\"grade_docs\", route)"
+      },
+      "diagram": {
+        "direction": "col",
+        "nodes": [
+          {
+            "id": "g",
+            "label": "grade_docs"
+          },
+          {
+            "id": "a",
+            "label": "answer"
+          },
+          {
+            "id": "r",
+            "label": "rewrite_query"
+          }
+        ],
+        "edges": [
+          [
+            "g",
+            "a"
+          ],
+          [
+            "g",
+            "r"
+          ]
+        ],
+        "caption": "route(state) returns 'answer' or 'rewrite_query'"
+      }
+    },
+    {
+      "id": "2026-11-22-13",
+      "bucket": "next",
+      "type": "code",
+      "topic": "send-fanout",
+      "title": "Send() returns a list — one entry per worker.",
+      "body": "The fan-out function returns `[Send(node, payload), ...]`. Each Send spawns the target node with its *own* private input, in parallel. The payload is whatever that node expects — it does not have to be the full State.",
+      "why": "This is the map step. Yesterday was the idea; this is the exact shape of the code.",
+      "code": {
+        "lang": "python",
+        "src": "from langgraph.types import Send\n\ndef fan_out(state: State):\n    return [Send(\"write_card\", {\"topic\": t}) for t in state[\"topics\"]]\n\ndef write_card(payload: dict) -> dict:\n    return {\"cards\": [draft(payload[\"topic\"])]}\n\nbuilder.add_conditional_edges(\"plan\", fan_out, [\"write_card\"])"
+      }
+    },
+    {
+      "id": "2026-11-22-14",
+      "bucket": "next",
+      "type": "code",
+      "topic": "reducers",
+      "title": "operator.add for lists. add_messages for chat.",
+      "body": "`Annotated[list, operator.add]` concatenates whatever parallel nodes return. `add_messages` is smarter: it appends new messages but *replaces* a message with a matching id — which is how you edit or delete history.",
+      "why": "Pick the wrong reducer and parallel writes either overwrite each other or duplicate forever.",
+      "code": {
+        "lang": "python",
+        "src": "import operator\nfrom typing import Annotated\nfrom langgraph.graph import MessagesState\nfrom langgraph.graph.message import add_messages\n\nclass State(TypedDict):\n    cards: Annotated[list[dict], operator.add]   # concat\n    messages: Annotated[list, add_messages]      # append-or-replace-by-id\n# MessagesState is a ready-made TypedDict with just the messages field"
+      }
+    },
+    {
+      "id": "2026-11-22-15",
+      "bucket": "next",
+      "type": "code",
+      "topic": "interrupt",
+      "title": "Resume with Command(resume=...) — the value lands where interrupt() was called.",
+      "body": "`interrupt(payload)` pauses the node and surfaces `payload` to the caller. When you invoke again with `Command(resume=value)`, the node re-runs from the top and `interrupt()` *returns* `value`. Needs a checkpointer and a thread_id.",
+      "why": "Human-in-the-loop approvals in production are exactly this: pause, show, resume.",
+      "code": {
+        "lang": "python",
+        "src": "from langgraph.types import interrupt, Command\n\ndef approve(state: State) -> dict:\n    ok = interrupt({\"plan\": state[\"plan\"]})   # pause here\n    return {\"approved\": ok}\n\ncfg = {\"configurable\": {\"thread_id\": \"t1\"}}\napp.invoke({\"plan\": \"delete 3 rows\"}, cfg)  # stops, returns __interrupt__\napp.invoke(Command(resume=True), cfg)      # ok == True"
+      }
+    },
+    {
+      "id": "2026-11-22-16",
+      "bucket": "next",
+      "type": "code",
+      "topic": "memory-store",
+      "title": "Store = namespace + key + value. Namespace is a tuple.",
+      "body": "`BaseStore` is a key-value store with namespaces like `(\"users\", user_id, \"prefs\")`. Nodes get it via the `store` argument. `put` saves, `get` reads one, `search` queries within a namespace. It outlives any thread.",
+      "why": "Checkpoints die with the thread. Store is how 'remember I prefer metric units' survives to next week.",
+      "code": {
+        "lang": "python",
+        "src": "from langgraph.store.memory import InMemoryStore\nfrom langgraph.store.base import BaseStore\n\ndef remember(state: State, *, store: BaseStore) -> dict:\n    ns = (\"users\", state[\"user_id\"], \"prefs\")\n    store.put(ns, \"units\", {\"value\": \"metric\"})\n    items = store.search(ns, limit=5)\n    return {\"prefs\": [i.value for i in items]}\n\napp = builder.compile(store=InMemoryStore(), checkpointer=saver)"
+      }
+    },
+    {
+      "id": "2026-11-22-17",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "rag-eval",
+      "title": "Context precision and context recall grade the *retriever*, not the LLM.",
+      "body": "Faithfulness and answer relevancy judge the generated text. Context precision asks: of the chunks I retrieved, how many were actually useful? Context recall asks: of the facts needed for the ideal answer, how many were in my chunks? Low recall → fetch more/better. Low precision → rerank or filter.",
+      "why": "When a RAG answer is wrong, these two tell you whether to fix retrieval or fix the prompt — a 10× faster debugging loop."
+    },
+    {
+      "id": "2026-11-22-18",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "hybrid-search",
+      "title": "RRF merges two ranked lists without comparing scores.",
+      "body": "BM25 scores and cosine similarities live on different scales, so you can't just add them. Reciprocal Rank Fusion ignores scores and uses *ranks*: each doc gets Σ 1/(k + rank) across the lists (k≈60). A doc ranked #1 by BM25 and #3 by vectors beats one that is #2 in only one list.",
+      "why": "Interview classic: 'how do you combine keyword and vector results?' RRF is the one-line answer."
+    },
+    {
+      "id": "2026-11-22-19",
+      "bucket": "next",
+      "type": "code",
+      "topic": "structured-output",
+      "title": "Pydantic field descriptions become the schema the model sees.",
+      "body": "`with_structured_output(Model)` turns your Pydantic class into a tool/JSON schema under the hood. `Field(description=...)` is the prompt for each field; validators run on the way back, so bad values fail loudly instead of silently.",
+      "why": "This is how you get type-safe output from an LLM — the same trick as args_schema on tools.",
+      "code": {
+        "lang": "python",
+        "src": "from pydantic import BaseModel, Field\n\nclass Triage(BaseModel):\n    severity: int = Field(ge=1, le=5, description=\"1=cosmetic, 5=outage\")\n    team: str = Field(description=\"One of: infra, data, app\")\n\nstructured = llm.with_structured_output(Triage)\nt = structured.invoke(\"Prod DB is down for all users\")\nt.severity  # 5 — a validated int, not a string to parse"
+      }
+    },
+    {
+      "id": "2026-11-22-20",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "langgraph-platform-deploy",
+      "title": "langgraph.json is the deploy contract.",
+      "body": "To deploy a graph (LangSmith Deployment / Agent Server), you point a `langgraph.json` at your compiled graph: `{\"graphs\": {\"agent\": \"./app.py:graph\"}, \"dependencies\": [\".\"]}`. The server adds the HTTP API, threads, checkpointing, streaming and cron — you don't write any of that. `langgraph dev` runs the same server locally.",
+      "why": "The question 'how do you ship a LangGraph agent?' has a boring answer, and boring is good."
+    },
+    {
+      "id": "2026-11-22-21",
+      "bucket": "next",
+      "type": "diagram",
+      "topic": "deep-agents-pattern",
+      "title": "Deep agents = planner + sub-agents + a filesystem.",
+      "body": "A 'deep agent' runs long tasks by (1) writing a todo plan, (2) delegating chunks to sub-agents with fresh context windows, and (3) using a filesystem as shared scratch memory instead of stuffing everything into one prompt.",
+      "why": "This is the shape behind coding agents and LangChain's `deepagents` package. The filesystem is the trick that beats context limits.",
+      "diagram": {
+        "direction": "col",
+        "nodes": [
+          {
+            "id": "p",
+            "label": "planner (todos)"
+          },
+          {
+            "id": "a",
+            "label": "sub-agent A"
+          },
+          {
+            "id": "b",
+            "label": "sub-agent B"
+          },
+          {
+            "id": "f",
+            "label": "filesystem"
+          }
+        ],
+        "edges": [
+          [
+            "p",
+            "a"
+          ],
+          [
+            "p",
+            "b"
+          ],
+          [
+            "a",
+            "f"
+          ],
+          [
+            "b",
+            "f"
+          ],
+          [
+            "f",
+            "p"
+          ]
+        ],
+        "caption": "sub-agents write files; the planner reads them back"
+      }
+    },
+    {
+      "id": "2026-11-22-22",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "eval-datasets-in-ci",
+      "title": "An eval dataset in CI is just pytest with an LLM judge.",
+      "body": "Store 30–50 (input, expected) pairs in a file. In CI, run the chain on each, score with DeepEval metrics (`assert_test`) or a LangSmith `evaluate()` run, and fail the build if the mean drops below a threshold. Treat the threshold like a coverage gate: regress and the PR goes red.",
+      "why": "Prompt edits are code changes with no compiler. The dataset is your compiler."
+    },
+    {
+      "id": "2026-11-22-23",
+      "bucket": "next",
+      "type": "quiz",
+      "topic": "model-routing-for-cost",
+      "title": "Route by difficulty, not by default.",
+      "body": "Most requests are easy. Sending every one to the biggest model is the single largest avoidable cost in agent systems.",
+      "quiz": {
+        "question": "You run a support agent. 80% of tickets are simple FAQs. Which routing design cuts cost most without hurting the hard 20%?",
+        "options": [
+          "Use the cheapest model everywhere and add retries",
+          "A small classifier/cheap model triages first; escalate to the big model only on low confidence or complex intents",
+          "Always use the biggest model but cache responses",
+          "Randomly split traffic 50/50 between models"
+        ],
+        "answer": 1,
+        "explain": "Cascade routing: a cheap first pass handles the easy majority and *decides* (via confidence or intent) when to escalate. Caching helps only for repeats; retries on a weak model burn tokens without fixing hard cases. In LangGraph this is one conditional edge after a 'triage' node."
+      }
+    },
+    {
+      "id": "2026-11-22-24",
+      "bucket": "next",
+      "type": "code",
+      "topic": "token-cost-tracking",
+      "title": "usage_metadata is on every AIMessage. Sum it.",
+      "body": "Each `AIMessage` carries `usage_metadata` with input/output token counts. Multiply by your price table and accumulate into State with an `operator.add` reducer, and every run reports its own cost — no tracing vendor needed.",
+      "why": "'What does one conversation cost?' is a question you'll be asked in week one of production.",
+      "code": {
+        "lang": "python",
+        "src": "PRICE = {\"in\": 2.5e-6, \"out\": 10e-6}  # $/token, example\n\ndef call_model(state: State) -> dict:\n    msg = llm.invoke(state[\"messages\"])\n    u = msg.usage_metadata\n    cost = u[\"input_tokens\"]*PRICE[\"in\"] + u[\"output_tokens\"]*PRICE[\"out\"]\n    return {\"messages\": [msg], \"cost_usd\": cost}  # cost_usd: Annotated[float, operator.add]"
+      }
+    },
+    {
+      "id": "2026-11-22-25",
+      "bucket": "fresh",
+      "type": "concept",
+      "topic": "send-tool-state",
+      "title": "langgraph 1.2.23: Send-dispatched tool calls now see the same state as edge calls.",
+      "body": "Released 19 Nov 2026. Previously, tool calls fanned out via `Send` could get a different view of State than tool calls reached by a normal edge, and `wrap_tool_call` state overrides didn't reach the tool. Both are fixed in langgraph 1.2.23 / langgraph-prebuilt 1.1.3.",
+      "why": "If you use Send() to run tools in parallel (yesterday's map step), upgrade — it closes a subtle 'why does my tool see stale state?' class of bug.",
+      "source": "https://releasebot.io/updates/langchain-ai"
+    },
+    {
+      "id": "2026-11-22-26",
+      "bucket": "fresh",
+      "type": "code",
+      "topic": "model-refusal-error",
+      "title": "langchain-anthropic 1.7.11 raises ModelRefusalError on refusals.",
+      "body": "Released 18 Nov 2026. When the model refuses (and you haven't forced a tool call), the integration now raises `ModelRefusalError` instead of handing you a normal-looking message. Catch it and route — don't let a refusal get parsed as an answer.",
+      "why": "Guardrails lesson for free: refusals are an *exception path*, so your graph should have an edge for them.",
+      "code": {
+        "lang": "python",
+        "src": "from langchain_core.exceptions import ModelRefusalError  # check exact import in your version\n\ndef call_model(state: State) -> dict:\n    try:\n        return {\"messages\": [llm.invoke(state[\"messages\"])]}\n    except ModelRefusalError as e:\n        return {\"refused\": True, \"reason\": str(e)}"
+      },
+      "source": "https://releasebot.io/updates/langchain-ai"
+    },
+    {
+      "id": "2026-11-22-27",
+      "bucket": "fresh",
+      "type": "concept",
+      "topic": "langgraph-dev-go-core",
+      "title": "`langgraph dev` now runs on a Go core with SQLite.",
+      "body": "Agent Server v0.19.0rc1 (12 Nov 2026): the local dev server moved from the Python in-memory runtime to a Go core persisting to `.langgraph_api/core.sqlite`. Your threads now survive a restart locally. Set `FF_INMEM_CORE=false` to get the old Python runtime back.",
+      "why": "If local runs suddenly 'remember' old threads, this is why. Delete the sqlite file to reset.",
+      "source": "https://docs.langchain.com/langsmith/agent-server-changelog"
+    },
+    {
+      "id": "2026-11-22-28",
+      "bucket": "fresh",
+      "type": "concept",
+      "topic": "langsmith-gateway-routing",
+      "title": "langchain-core 1.8.1: per-context LangSmith gateway override.",
+      "body": "A point release added a `langsmith_gateway` setting that can be overridden per context (PR #41836), and by 18–19 Nov the OpenAI, Anthropic, Groq, xAI and DeepSeek integrations send the gateway headers from the client. Practical reading: you can point *this request's* traffic/traces at a different gateway — e.g. per tenant or to keep staging out of prod.",
+      "why": "Multi-tenant observability was awkward before; this is the hook. Confirm exact semantics in the LangChain docs before relying on it.",
+      "source": "https://kenashe.ai/blog/2026-11-15-what-a-point-release-in-langchain-core-tells-you-about-running-agents-in-prod"
+    },
+    {
+      "id": "2026-11-22-29",
+      "bucket": "fresh",
+      "type": "code",
+      "topic": "mlflow-compare-evaluations",
+      "title": "MLflow 3.18: compare_evaluations() diffs two eval runs.",
+      "body": "MLflow 3.18.0 (2 Nov 2026) added the experimental `mlflow.genai.compare_evaluations()` plus Automatic Issue Detection (an Issues tab that clusters failing traces). Instead of eyeballing two scorer tables, you ask MLflow which examples got better or worse between prompt v1 and v2.",
+      "why": "This is the 'did my change help?' question from the eval-in-CI card, answered inside the tool you already use for tracing.",
+      "code": {
+        "lang": "python",
+        "src": "import mlflow\n\nr1 = mlflow.genai.evaluate(data=ds, predict_fn=v1, scorers=scorers)\nr2 = mlflow.genai.evaluate(data=ds, predict_fn=v2, scorers=scorers)\n\n# experimental in 3.18.0 — signature may change\ndiff = mlflow.genai.compare_evaluations(r1.run_id, r2.run_id)"
+      },
+      "source": "https://mlflow.org/releases/"
+    },
+    {
+      "id": "2026-11-22-30",
+      "bucket": "fresh",
+      "type": "quiz",
+      "topic": "langsmith-cli-investigate",
+      "title": "LangSmith CLI gained `investigate` and `verify --since`.",
+      "body": "Week of 9–16 Nov 2026: new `langsmith investigate`, `langsmith verify --since <fix time>`, `langsmith setup`, and `langsmith feedback create/list` commands. `profiles create <name> --keychain` stores the API key in the OS keychain.",
+      "quiz": {
+        "question": "You shipped a prompt fix at 14:00. Which new CLI command is designed to check whether traces *after* the fix look healthy?",
+        "options": [
+          "langsmith investigate",
+          "langsmith verify --since 14:00",
+          "langsmith feedback list",
+          "langsmith setup"
+        ],
+        "answer": 1,
+        "explain": "`verify --since` is the post-deploy check: it looks only at runs after your fix time. `investigate` is the pre-fix tool for digging into what went wrong. Together they make a tight fix → verify loop from the terminal."
+      },
+      "source": "https://docs.langchain.com/langsmith/changelog"
+    }
+  ]
+}
