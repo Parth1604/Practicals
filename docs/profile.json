@@ -1,6 +1,6 @@
 {
   "learner": "Parth",
-  "updated": "2026-11-22",
+  "updated": "2026-11-23",
   "goal": "AI engineer: LangChain, LangGraph, RAG, agentic systems, MLflow, observability and evals",
   "known": [
     "langchain-vs-langgraph",
@@ -19,13 +19,7 @@
     "memory-store",
     "rag-eval",
     "hybrid-search",
-    "structured-output"
-  ],
-  "struggled_with": [
-    "langchain-vs-langgraph (initially felt too abstract — needs concrete analogies)",
-    "connecting chains, agents, multi-agent into one mental model"
-  ],
-  "next": [
+    "structured-output",
     "prompt-versioning",
     "langgraph-platform-deploy",
     "deep-agents-pattern",
@@ -34,12 +28,26 @@
     "guardrails",
     "token-cost-tracking",
     "agent-ladder",
-    "send-tool-state",
     "model-refusal-error",
+    "mlflow-compare-evaluations"
+  ],
+  "struggled_with": [
+    "langchain-vs-langgraph (initially felt too abstract — needs concrete analogies)",
+    "connecting chains, agents, multi-agent into one mental model"
+  ],
+  "next": [
+    "send-tool-state",
     "langgraph-dev-go-core",
     "langsmith-gateway-routing",
-    "mlflow-compare-evaluations",
-    "langsmith-cli-investigate"
+    "langsmith-cli-investigate",
+    "subgraphs",
+    "streaming-modes",
+    "remove-all-messages",
+    "finish-reason-standard",
+    "hitl-synthetic-toolmessage",
+    "stream-retry",
+    "langsmith-feedback-cli",
+    "mlflow-online-scorers"
   ],
   "stack": [
     "LangChain",

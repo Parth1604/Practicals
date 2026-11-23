@@ -1,0 +1,512 @@
+{
+  "date": "2026-11-23",
+  "generated_by": "nightly-task",
+  "cards": [
+    {
+      "id": "2026-11-23-01",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "langchain-vs-langgraph",
+      "title": "LangChain is a *function call*. LangGraph is a *while loop with a save button*.",
+      "body": "A LangChain chain runs top to bottom once: prompt → model → parser, done. A LangGraph graph keeps a State dict alive, lets nodes jump backwards, and can persist that dict between runs. If your pseudocode has `while` or `if ... goto`, it is a graph.",
+      "why": "Interview framing: 'LangChain for DAGs, LangGraph for cyclic, stateful, resumable workflows.'"
+    },
+    {
+      "id": "2026-11-23-02",
+      "bucket": "reinforce",
+      "type": "diagram",
+      "topic": "agent-ladder",
+      "title": "Same model, same tools — only the *control flow* changes on each rung.",
+      "body": "Rung 1: a chain calls the model once. Rung 2: an agent lets the model decide the next call in a loop. Rung 3: multi-agent gives several loops their own state and a router. Nothing new appears except who decides what happens next.",
+      "why": "This is the one mental model that connects chains, agents and multi-agent systems — the thing that felt disconnected before.",
+      "diagram": {
+        "direction": "row",
+        "nodes": [
+          {
+            "id": "c",
+            "label": "chain\n(fixed order)"
+          },
+          {
+            "id": "a",
+            "label": "agent\n(model picks next)"
+          },
+          {
+            "id": "m",
+            "label": "multi-agent\n(router picks agent)"
+          }
+        ],
+        "edges": [
+          [
+            "c",
+            "a"
+          ],
+          [
+            "a",
+            "m"
+          ]
+        ],
+        "caption": "Each rung hands more of the control flow to the model."
+      }
+    },
+    {
+      "id": "2026-11-23-03",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "rag-chunking",
+      "title": "Split on structure first, size second.",
+      "body": "`RecursiveCharacterTextSplitter` tries separators in order: paragraphs, then lines, then sentences, then characters. It only falls to the next separator when a piece is still too big. So chunks respect document structure wherever they can.",
+      "why": "Naive fixed-size splitting cuts sentences in half; the embedding of half a sentence is garbage.",
+      "code": {
+        "lang": "python",
+        "src": "from langchain_text_splitters import RecursiveCharacterTextSplitter\n\nsplitter = RecursiveCharacterTextSplitter(\n    chunk_size=800,\n    chunk_overlap=100,\n    separators=[\"\\n\\n\", \"\\n\", \". \", \" \", \"\"],  # tried in order\n)\nchunks = splitter.split_text(doc_text)"
+      }
+    },
+    {
+      "id": "2026-11-23-04",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "tools-docstring",
+      "title": "The model only sees what you *typed*, never what the function *does*.",
+      "body": "A tool's name, docstring and argument schema are serialized into the prompt. The body is invisible to the model. Pick the fix for the scenario below.",
+      "quiz": {
+        "question": "Your tool `lookup(id: str)` is correct but the agent keeps passing customer *names* instead of IDs. Cheapest fix?",
+        "options": [
+          "Switch to a bigger model",
+          "Add a Field description: 'Numeric customer ID like \"C-10422\", not a name'",
+          "Catch the error inside lookup() and search by name",
+          "Lower the temperature"
+        ],
+        "answer": 1,
+        "explain": "The model never saw that `id` meant a specific format — it only saw `id: str`. Field descriptions are the cheapest lever because they change what the model reads before it decides. Fixing it inside the function hides the problem and still costs a wasted tool call."
+      }
+    },
+    {
+      "id": "2026-11-23-05",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "react-pattern",
+      "title": "`create_agent` is ReAct with the loop already written.",
+      "body": "You give it a model and tools; it builds the model → tools → model cycle and the single exit. Everything you learned about ReAct is still there — you just don't hand-write the conditional edge.",
+      "why": "Know the hand-written version for interviews; use the prebuilt one in production.",
+      "code": {
+        "lang": "python",
+        "src": "from langchain.agents import create_agent\n\nagent = create_agent(\n    model=\"anthropic:claude-sonnet-4-5\",\n    tools=[search, calculator],\n    system_prompt=\"Answer with numbers, cite the tool you used.\",\n)\nresult = agent.invoke({\"messages\": [(\"user\", \"GDP of Spain / population?\")]})\nprint(result[\"messages\"][-1].content)"
+      }
+    },
+    {
+      "id": "2026-11-23-06",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "checkpointing",
+      "title": "A checkpoint is written after *every* node, not just at the end.",
+      "body": "Each super-step saves the full State under the thread_id. That is why you can resume mid-run after a crash, time-travel to a past step, or fork a thread from any checkpoint — the history is already there.",
+      "why": "Saves the 'I lost 40 tool calls when the pod restarted' incident."
+    },
+    {
+      "id": "2026-11-23-07",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "supervisor-pattern",
+      "title": "The supervisor's job is to *route*, not to *do*.",
+      "body": "A good supervisor node has one responsibility: decide which worker runs next, or finish. Workers own the real tools. Pick the design smell below.",
+      "quiz": {
+        "question": "Your supervisor has 14 tools bound to it and the workers have 2 each. Latency doubled. What went wrong?",
+        "options": [
+          "Too many workers",
+          "The supervisor is doing the work itself instead of delegating, so every step pays for a 14-tool prompt",
+          "The checkpointer is too slow",
+          "Workers need a bigger model"
+        ],
+        "answer": 1,
+        "explain": "Every tool schema is prompt tokens on every call. A supervisor carrying 14 tools is a fat agent with a routing side-hustle. Give the supervisor zero tools (or just a `handoff` schema) and push the tools down to the specialists."
+      }
+    },
+    {
+      "id": "2026-11-23-08",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "observability-lanes",
+      "title": "Trace → dataset → eval is one pipeline, not three products.",
+      "body": "Traces capture real inputs and outputs. You curate the interesting ones into a dataset. Evals replay that dataset against new versions. LangSmith owns the first two lanes; DeepEval or MLflow can own the third.",
+      "why": "The best eval datasets come from production traces, not from someone inventing test cases."
+    },
+    {
+      "id": "2026-11-23-09",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "mlflow-tracing",
+      "title": "Autolog LangChain once; every chain and agent call becomes a trace.",
+      "body": "`mlflow.langchain.autolog()` patches the LangChain callbacks so you get spans for prompts, models, tools and retrievers without decorating anything. Combine with `@mlflow.trace` for your own glue code.",
+      "why": "One line in your entrypoint beats remembering to decorate 30 functions.",
+      "code": {
+        "lang": "python",
+        "src": "import mlflow\nmlflow.langchain.autolog()          # spans for every runnable\nmlflow.set_experiment(\"support-agent\")\n\n@mlflow.trace                        # your own glue code as a span\ndef answer(q: str) -> str:\n    return agent.invoke({\"messages\": [(\"user\", q)]})[\"messages\"][-1].content"
+      }
+    },
+    {
+      "id": "2026-11-23-10",
+      "bucket": "reinforce",
+      "type": "diagram",
+      "topic": "send-fanout",
+      "title": "Send() fans out. A reducer fans back in.",
+      "body": "The planner emits one `Send` per item, each worker runs with its own private input, and their outputs are appended to a shared list by a reducer. Without the reducer the parallel writes would overwrite each other.",
+      "why": "Map-reduce is the shape behind batch summarisation, multi-query RAG, and this very feed.",
+      "diagram": {
+        "direction": "row",
+        "nodes": [
+          {
+            "id": "p",
+            "label": "planner"
+          },
+          {
+            "id": "w1",
+            "label": "worker"
+          },
+          {
+            "id": "w2",
+            "label": "worker"
+          },
+          {
+            "id": "w3",
+            "label": "worker"
+          },
+          {
+            "id": "r",
+            "label": "collect\n(operator.add)"
+          }
+        ],
+        "edges": [
+          [
+            "p",
+            "w1"
+          ],
+          [
+            "p",
+            "w2"
+          ],
+          [
+            "p",
+            "w3"
+          ],
+          [
+            "w1",
+            "r"
+          ],
+          [
+            "w2",
+            "r"
+          ],
+          [
+            "w3",
+            "r"
+          ]
+        ],
+        "caption": "Send() = one arrow per item; the reducer merges the returns."
+      }
+    },
+    {
+      "id": "2026-11-23-11",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "interrupt",
+      "title": "interrupt() raises — the code after it does *not* run on the first pass.",
+      "body": "When a node calls `interrupt(payload)`, execution stops and the graph returns. On resume, the node re-runs from the top and `interrupt()` returns the resume value. Any side effect *before* the interrupt happens twice.",
+      "quiz": {
+        "question": "A node sends an email, then calls interrupt() for approval, then saves to DB. The human approves. What happens?",
+        "options": [
+          "Email once, save once",
+          "Email twice, save once — the node re-executes from the top on resume",
+          "Email once, save twice",
+          "Nothing — interrupt() cancels the node"
+        ],
+        "answer": 1,
+        "explain": "Resume replays the node; interrupt() now returns the approval instead of pausing. Put side effects *after* the interrupt, or move them to a separate node so the replay is cheap and idempotent."
+      }
+    },
+    {
+      "id": "2026-11-23-12",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "rag-eval",
+      "title": "Build the eval before you tune the retriever.",
+      "body": "Changing chunk size, top-k or the embedding model without a scored dataset is guessing. Twenty question/ground-truth pairs plus faithfulness, answer relevancy and context recall turn every change into a number you can compare.",
+      "why": "The single habit that separates a RAG demo from a RAG system."
+    },
+    {
+      "id": "2026-11-23-13",
+      "bucket": "next",
+      "type": "code",
+      "topic": "prompt-versioning",
+      "title": "Pull prompts by *tag*, not by *latest*.",
+      "body": "LangSmith prompt hub lets you push a prompt, then reference it as `name:production`. Code deploys and prompt deploys are decoupled: promote a prompt by moving the tag, roll back the same way.",
+      "why": "`latest` in production means someone editing a prompt in the UI at 5pm changes your app's behaviour at 5:01.",
+      "code": {
+        "lang": "python",
+        "src": "from langsmith import Client\n\nclient = Client()\nprompt = client.pull_prompt(\"support-triage:production\")  # pinned by tag\nchain = prompt | model\n# promote: push a new commit, then move the tag in the UI or via client"
+      }
+    },
+    {
+      "id": "2026-11-23-14",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "langgraph-platform-deploy",
+      "title": "A deployed graph is an *assistant*; a run lives on a *thread*.",
+      "body": "LangGraph Server exposes your graph as an assistant (graph + config). Clients create a thread, then start runs on it. The server handles the checkpointer, queues and streaming, so your graph code stays identical to local.",
+      "why": "Thread = conversation ID. Same thread_id you used with the checkpointer locally."
+    },
+    {
+      "id": "2026-11-23-15",
+      "bucket": "next",
+      "type": "code",
+      "topic": "deep-agents-pattern",
+      "title": "Sub-agents get a *fresh* context window — that is the whole point.",
+      "body": "A deep agent delegates a research task to a sub-agent that starts with an empty history and returns only a summary. The parent's context stays small no matter how many tool calls the child burned.",
+      "why": "Context bloat, not model IQ, is what kills long agent runs.",
+      "code": {
+        "lang": "python",
+        "src": "from deepagents import create_deep_agent\n\nresearcher = {\n    \"name\": \"researcher\",\n    \"description\": \"Deep-dive one question; return a 5-line summary.\",\n    \"system_prompt\": \"Search widely, then summarise. Return only the summary.\",\n    \"tools\": [web_search],\n}\nagent = create_deep_agent(tools=[web_search], subagents=[researcher])"
+      }
+    },
+    {
+      "id": "2026-11-23-16",
+      "bucket": "next",
+      "type": "code",
+      "topic": "eval-datasets-in-ci",
+      "title": "Fail the build on a *score threshold*, not on exact strings.",
+      "body": "LLM outputs vary; your assertion should not. Run the dataset through an LLM judge, average the score, and assert it stays above a bar. Store the bar in one place so a regression is a red test, not a vibe.",
+      "why": "Exact-match asserts on LLM text flake every run and get deleted within a week.",
+      "code": {
+        "lang": "python",
+        "src": "from deepeval import evaluate\nfrom deepeval.metrics import FaithfulnessMetric\nfrom deepeval.test_case import LLMTestCase\n\ndef test_rag_faithfulness(golden_set):\n    cases = [LLMTestCase(input=g.q, actual_output=rag(g.q),\n                         retrieval_context=retrieve(g.q)) for g in golden_set]\n    res = evaluate(cases, [FaithfulnessMetric(threshold=0.8)])\n    assert res.pass_rate >= 0.9"
+      }
+    },
+    {
+      "id": "2026-11-23-17",
+      "bucket": "next",
+      "type": "diagram",
+      "topic": "model-routing-for-cost",
+      "title": "A router is a tiny classifier in front of two models.",
+      "body": "A cheap model (or even a regex) labels the request easy/hard. Easy goes to the small model, hard goes to the big one. Log the label so you can audit misroutes with evals later.",
+      "why": "Typical result: 60–80% of traffic on the cheap model with no measurable quality drop on the hard cases.",
+      "diagram": {
+        "direction": "row",
+        "nodes": [
+          {
+            "id": "in",
+            "kind": "terminal",
+            "label": "request"
+          },
+          {
+            "id": "r",
+            "label": "router\n(small model)"
+          },
+          {
+            "id": "s",
+            "label": "cheap model"
+          },
+          {
+            "id": "b",
+            "label": "frontier model"
+          },
+          {
+            "id": "out",
+            "kind": "terminal",
+            "label": "answer"
+          }
+        ],
+        "edges": [
+          [
+            "in",
+            "r"
+          ],
+          [
+            "r",
+            "s"
+          ],
+          [
+            "r",
+            "b"
+          ],
+          [
+            "s",
+            "out"
+          ],
+          [
+            "b",
+            "out"
+          ]
+        ],
+        "caption": "Route by predicted difficulty; log the route for eval."
+      }
+    },
+    {
+      "id": "2026-11-23-18",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "guardrails",
+      "title": "Guardrails are nodes, not prompts.",
+      "body": "Put input checks (PII, injection, off-topic) in a node *before* the model and output checks (schema, policy) in a node *after*. Each check is deterministic code or a small classifier — never 'please don't' in the system prompt.",
+      "why": "A prompt instruction is a suggestion. A node that routes to END is a wall."
+    },
+    {
+      "id": "2026-11-23-19",
+      "bucket": "next",
+      "type": "quiz",
+      "topic": "guardrails",
+      "title": "Where does an output guardrail route when it fails?",
+      "body": "A failed check has three sane destinations: regenerate, hand to a human, or return a safe refusal. Pick the one that matches the scenario.",
+      "quiz": {
+        "question": "Your output checker finds the agent's reply leaks an internal URL. The user is waiting. Best route?",
+        "options": [
+          "END with the reply anyway, log a warning",
+          "Loop back to the model with the violation in a system message, max 2 retries, then refuse",
+          "interrupt() and wait for a human on every leak",
+          "Delete the URL with regex and send"
+        ],
+        "answer": 1,
+        "explain": "A bounded retry with the violation explained usually fixes it in one pass and keeps latency sane. Unbounded human interrupts don't scale; regex scrubbing hides the real cause from your traces. Option 0 is the thing the guardrail exists to prevent."
+      }
+    },
+    {
+      "id": "2026-11-23-20",
+      "bucket": "next",
+      "type": "code",
+      "topic": "token-cost-tracking",
+      "title": "Attach a *price table* once; let a callback do the arithmetic.",
+      "body": "`usage_metadata` gives tokens, not money. A callback handler that multiplies by per-model rates turns every run into a dollar figure you can log, tag with thread_id, and alert on.",
+      "why": "Finance asks 'what does one conversation cost?' — this answers it per thread.",
+      "code": {
+        "lang": "python",
+        "src": "from langchain_core.callbacks import BaseCallbackHandler\n\nRATES = {\"claude-sonnet-4-5\": (3e-6, 15e-6)}  # $/input, $/output token\n\nclass Cost(BaseCallbackHandler):\n    total = 0.0\n    def on_llm_end(self, response, **kw):\n        u = response.generations[0][0].message.usage_metadata\n        i, o = RATES[kw[\"tags\"][0]] if kw.get(\"tags\") else (3e-6, 15e-6)\n        self.total += u[\"input_tokens\"] * i + u[\"output_tokens\"] * o"
+      }
+    },
+    {
+      "id": "2026-11-23-21",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "model-refusal-error",
+      "title": "Treat a refusal as a *typed exception*, not as text to parse.",
+      "body": "Older code grepped the reply for 'I can't help'. With `ModelRefusalError` you catch one exception class, log it as a refusal in traces, and route the graph to a fallback — the same way you'd handle a rate limit.",
+      "why": "Refusals that look like normal answers silently poison your eval scores and your downstream parsers."
+    },
+    {
+      "id": "2026-11-23-22",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "mlflow-compare-evaluations",
+      "title": "Pin a baseline, then every eval run is a *diff*.",
+      "body": "Comparing two evaluation runs side by side answers the real question: did this change help? MLflow lines up per-example scores, latency and cost against the pinned baseline so regressions on a few rows don't hide behind a flat average.",
+      "why": "Averages lie; per-row diffs show the three questions your new prompt broke."
+    },
+    {
+      "id": "2026-11-23-23",
+      "bucket": "next",
+      "type": "code",
+      "topic": "subgraphs",
+      "title": "A compiled graph is just a node.",
+      "body": "Compile a graph, then `add_node` it into a parent. If both share State keys, data flows automatically; if not, wrap it in a function that translates. This is how you package a RAG pipeline or a specialist agent as a reusable unit.",
+      "why": "Subgraphs are how multi-agent systems stay testable: each agent is a graph you can run alone.",
+      "code": {
+        "lang": "python",
+        "src": "rag = rag_builder.compile()               # has keys: question, answer\n\nparent = StateGraph(ParentState)          # also has question, answer\nparent.add_node(\"rag\", rag)               # shared keys flow through\nparent.add_node(\"critic\", critic_node)\nparent.add_edge(START, \"rag\")\nparent.add_edge(\"rag\", \"critic\")\napp = parent.compile()"
+      }
+    },
+    {
+      "id": "2026-11-23-24",
+      "bucket": "next",
+      "type": "quiz",
+      "topic": "streaming-modes",
+      "title": "`updates`, `values`, `messages` — three answers to 'stream what?'",
+      "body": "`stream_mode=\"values\"` emits the full State after each step; `\"updates\"` emits only the node's returned delta; `\"messages\"` emits LLM tokens as they arrive. Pick the one for the scenario.",
+      "quiz": {
+        "question": "You want a chat UI that shows tokens appearing live, plus a progress bar that ticks once per node. Which combination?",
+        "options": [
+          "stream_mode=\"values\"",
+          "stream_mode=[\"messages\", \"updates\"]",
+          "stream_mode=\"debug\"",
+          "stream_mode=\"updates\" only"
+        ],
+        "answer": 1,
+        "explain": "stream_mode accepts a list. `messages` gives token-level chunks for the typing effect; `updates` fires once per node for the progress bar. `values` would resend the whole state each step — wasteful for a UI."
+      }
+    },
+    {
+      "id": "2026-11-23-25",
+      "bucket": "fresh",
+      "type": "code",
+      "topic": "remove-all-messages",
+      "title": "langgraph 1.2.24 fixes `REMOVE_ALL_MESSAGES` in the messages reducer.",
+      "body": "Returning `RemoveMessage(id=REMOVE_ALL_MESSAGES)` tells `add_messages` to wipe history before appending what follows — the idiom for summarise-and-compact. 1.2.24 (Nov 20) fixes edge cases in that delta path and tolerates `None` checkpoints in `DeltaChannel`.",
+      "why": "This is the clean way to cap context: replace 40 messages with one summary message in a single node return.",
+      "code": {
+        "lang": "python",
+        "src": "from langchain_core.messages import RemoveMessage, SystemMessage\nfrom langgraph.graph.message import REMOVE_ALL_MESSAGES\n\ndef compact(state):\n    summary = llm.invoke([(\"user\", f\"Summarise:\\n{state['messages']}\")]).content\n    return {\"messages\": [\n        RemoveMessage(id=REMOVE_ALL_MESSAGES),\n        SystemMessage(content=f\"Conversation so far: {summary}\"),\n    ]}"
+      },
+      "source": "https://releasebot.io/updates/langchain-ai"
+    },
+    {
+      "id": "2026-11-23-26",
+      "bucket": "fresh",
+      "type": "concept",
+      "topic": "finish-reason-standard",
+      "title": "langchain-core 1.8.4: one `finish_reason` across providers.",
+      "body": "OpenAI says `stop`/`length`/`tool_calls`; Anthropic says `end_turn`/`max_tokens`/`tool_use`. 1.8.4 (Nov 19) standardises the finish reason on message-finish events, with langchain-openai 1.8.5 and langchain-anthropic 1.7.12 adopting it.",
+      "why": "A truncated answer (`length`) should trigger a retry with more budget — now you can detect it with one check regardless of model.",
+      "source": "https://releasebot.io/updates/langchain-ai"
+    },
+    {
+      "id": "2026-11-23-27",
+      "bucket": "fresh",
+      "type": "concept",
+      "topic": "hitl-synthetic-toolmessage",
+      "title": "Rejected tool calls now leave a *tagged* ToolMessage in the trace.",
+      "body": "When a human rejects a tool call in a HITL flow, LangChain fabricates a ToolMessage so the transcript stays valid. langchain-core 1.8.4 tags those synthetic messages with source metadata, so evals and traces can tell 'tool ran' from 'human said no'.",
+      "why": "Without the tag your tool-success metrics count human rejections as tool outputs.",
+      "source": "https://releasebot.io/updates/langchain-ai"
+    },
+    {
+      "id": "2026-11-23-28",
+      "bucket": "fresh",
+      "type": "quiz",
+      "topic": "stream-retry",
+      "title": "langchain-openai 1.8.4: a server error *mid-stream* is now retryable.",
+      "body": "Before, an error after the first token was terminal. 1.8.4 (Nov 19) classifies in-stream server errors as retryable, so `.with_retry()` and `max_retries` apply to streaming too.",
+      "quiz": {
+        "question": "Your streaming agent dies 200 tokens in with a 5xx. With 1.8.4 and max_retries=2, what does the user see?",
+        "options": [
+          "The partial 200 tokens, then an error",
+          "A retried request; the stream restarts from the beginning",
+          "The stream resumes from token 201",
+          "Nothing — streaming disables retries"
+        ],
+        "answer": 1,
+        "explain": "Retry re-issues the request; there is no server-side cursor to resume from. Your UI should buffer or clear the partial output on retry. Token 201 resumption would need provider support that doesn't exist."
+      },
+      "source": "https://releasebot.io/updates/langchain-ai"
+    },
+    {
+      "id": "2026-11-23-29",
+      "bucket": "fresh",
+      "type": "code",
+      "topic": "langsmith-feedback-cli",
+      "title": "LangSmith CLI: `langsmith feedback create` scores a run from the shell.",
+      "body": "The Nov 9–16 changelog adds `feedback create` and `feedback list`. Pair it with a script that reads your nightly eval results and you have feedback on production runs without touching the SDK.",
+      "why": "Lets a bash step in CI attach a score to the exact trace it tested.",
+      "code": {
+        "lang": "python",
+        "src": "# shell, not Python — attach a score to a run after an offline check\nlangsmith feedback create --run-id \"$RUN_ID\" \\\n  --key faithfulness --score 0.92 \\\n  --comment \"nightly deepeval judge\"\nlangsmith feedback list --run-id \"$RUN_ID\""
+      },
+      "source": "https://docs.langchain.com/langsmith/changelog"
+    },
+    {
+      "id": "2026-11-23-30",
+      "bucket": "fresh",
+      "type": "concept",
+      "topic": "mlflow-online-scorers",
+      "title": "MLflow 3.18 runs *your* Python scorers on every new trace, automatically.",
+      "body": "Code-based online scorers (experimental) let you register a custom scorer and call `.start()`; the server then evaluates incoming traces in isolated job containers with networking disabled. Needs a SQL backend and `MLFLOW_SERVER_ENABLE_CUSTOM_SCORERS=true`.",
+      "why": "Closes the loop: offline eval logic becomes live monitoring without a second codebase.",
+      "source": "https://mlflow.org/releases/3.18.0/"
+    }
+  ]
+}
