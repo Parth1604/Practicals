@@ -1,0 +1,576 @@
+{
+  "date": "2026-11-24",
+  "generated_by": "nightly-task",
+  "cards": [
+    {
+      "id": "2026-11-24-01",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "langgraph-state",
+      "title": "Input schema, output schema, and the *scratch* in between.",
+      "body": "`StateGraph` takes one full state plus optional `input_schema` and `output_schema`. Callers only pass input keys and only get output keys back; scratch fields stay inside the graph. Same dict, three views.",
+      "why": "Interview question: 'how do you stop internal fields leaking to the API response?' — this is the answer, not a post-filter.",
+      "code": {
+        "lang": "python",
+        "src": "from typing import TypedDict\nfrom langgraph.graph import StateGraph, START, END\n\nclass In(TypedDict): question: str\nclass Out(TypedDict): answer: str\nclass State(In, Out): scratch: str          # full state = in + out + private\n\ndef solve(s: State): return {\"scratch\": \"notes\", \"answer\": s[\"question\"].upper()}\n\ng = StateGraph(State, input_schema=In, output_schema=Out)\ng.add_node(\"solve\", solve); g.add_edge(START, \"solve\"); g.add_edge(\"solve\", END)\nprint(g.compile().invoke({\"question\": \"hi\"}))   # {'answer': 'HI'} — no scratch"
+      }
+    },
+    {
+      "id": "2026-11-24-02",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "checkpointing",
+      "title": "Time travel = pick a *checkpoint_id*, not just a thread_id.",
+      "body": "Every checkpoint on a thread has its own id. `graph.get_state_history(config)` lists them newest-first. Passing a specific `checkpoint_id` in `configurable` makes the next call branch from that point instead of the latest one.",
+      "quiz": {
+        "question": "Step 3 of a 5-step run used a bad search query. You want to rerun from *before* step 3 with a corrected query, keeping steps 1–2. What do you do?",
+        "options": [
+          "Clear the thread and invoke again with the fixed query",
+          "Find the checkpoint before step 3 in get_state_history, call update_state with that checkpoint_id and the new query, then invoke(None, cfg)",
+          "Edit the SQLite checkpoint row by hand",
+          "Set recursion_limit=3 so it stops early"
+        ],
+        "answer": 1,
+        "explain": "update_state against an older checkpoint creates a *fork*: a new checkpoint whose parent is the one you chose. invoke(None, cfg) then resumes from the fork. Steps 1–2 are never recomputed, and the original branch is still there for comparison."
+      }
+    },
+    {
+      "id": "2026-11-24-03",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "reducers",
+      "title": "No reducer + two parallel writers = an error, not a merge.",
+      "body": "Without a reducer a key is *overwritten*. When two nodes in the same superstep both return that key, LangGraph has no rule for which wins and refuses rather than guess.",
+      "quiz": {
+        "question": "Nodes `a` and `b` run in parallel after START and both return `{\"result\": ...}`. `result: str` has no reducer. What happens?",
+        "options": [
+          "The later node silently wins",
+          "Both values are concatenated",
+          "InvalidUpdateError: can receive only one value per step",
+          "The graph deadlocks"
+        ],
+        "answer": 2,
+        "explain": "LangGraph raises InvalidUpdateError at runtime. The fix is to declare how writes combine: `Annotated[list[str], operator.add]` to collect both, or a custom reducer that keeps the best. Reducers are not optional once you fan out."
+      }
+    },
+    {
+      "id": "2026-11-24-04",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "memory-store",
+      "title": "Give the Store an embedder and `search()` becomes semantic.",
+      "body": "`InMemoryStore(index={\"embed\": embeddings, \"dims\": 1536})` indexes every `put()` value. `store.search((\"users\", uid), query=\"food preferences\", limit=3)` then returns the nearest memories, not just key lookups. Postgres store does the same with pgvector.",
+      "why": "This is how a 'remember what the user likes' feature works without stuffing every memory into the prompt."
+    },
+    {
+      "id": "2026-11-24-05",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "hybrid-search",
+      "title": "RRF in eight lines — no scores compared, only ranks.",
+      "body": "Reciprocal Rank Fusion gives each doc `1/(k+rank)` from every list it appears in and sums. BM25 scores and cosine scores never meet, so the scale mismatch disappears. k≈60 flattens the top ranks so one list cannot dominate.",
+      "why": "Interviewers love 'how do you merge BM25 and vector results?' — writing RRF from memory ends the question.",
+      "code": {
+        "lang": "python",
+        "src": "def rrf(*ranked_lists, k=60):\n    scores = {}\n    for docs in ranked_lists:\n        for rank, d in enumerate(docs):\n            scores[d.page_content] = scores.get(d.page_content, 0) + 1 / (k + rank + 1)\n    return sorted(scores, key=scores.get, reverse=True)\n\nbm25_hits = bm25_retriever.invoke(q)                                  # lexical\nvec_hits = vectorstore.as_retriever(search_kwargs={\"k\": 10}).invoke(q) # semantic\nfused = rrf(bm25_hits, vec_hits)[:5]"
+      }
+    },
+    {
+      "id": "2026-11-24-06",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "structured-output",
+      "title": "`include_raw=True` turns a crash into a value you can inspect.",
+      "body": "By default `with_structured_output` raises when the model's JSON fails Pydantic validation. With `include_raw=True` it returns `{\"raw\", \"parsed\", \"parsing_error\"}` so you decide what to do.",
+      "quiz": {
+        "question": "1 in 200 calls, the model emits a status outside your Enum and the whole request 500s. Cheapest robust fix?",
+        "options": [
+          "Wrap the call in try/except and return None",
+          "Use with_structured_output(Schema, include_raw=True) and route parsing_error cases to a retry with the error text appended",
+          "Switch the Enum to str",
+          "Increase temperature so it explores more"
+        ],
+        "answer": 1,
+        "explain": "include_raw gives you the raw AIMessage *and* the validation error. Feeding that error back ('status must be one of …') fixes most cases in one retry. Loosening the schema hides the bug; a bare except loses the information you need to recover."
+      }
+    },
+    {
+      "id": "2026-11-24-07",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "lcel",
+      "title": "`.with_retry()` and `.batch()` are free on every Runnable.",
+      "body": "Because a chain is a Runnable, resilience and throughput are methods, not rewrites. `with_retry` wraps one step with exponential backoff; `batch` runs inputs concurrently under `max_concurrency`.",
+      "why": "Same chain, zero new code, 5× faster offline eval runs.",
+      "code": {
+        "lang": "python",
+        "src": "chain = prompt | llm.with_retry(stop_after_attempt=3) | parser\n\nanswers = chain.batch(\n    [{\"q\": \"What is RRF?\"}, {\"q\": \"What is a reducer?\"}],\n    config={\"max_concurrency\": 5},\n)"
+      }
+    },
+    {
+      "id": "2026-11-24-08",
+      "bucket": "reinforce",
+      "type": "diagram",
+      "topic": "mlflow-tracing",
+      "title": "A trace is a *tree* of spans, and each span has a type.",
+      "body": "The root span is the agent call. Children are typed: `RETRIEVER`, `LLM`, `TOOL`, `CHAIN`. The type is what lets the MLflow UI render retrieved docs as docs and tool calls as calls, and what evaluators like `RetrievalGroundedness` look for.",
+      "why": "If your custom span has the wrong type, retrieval evaluators silently find no context.",
+      "diagram": {
+        "direction": "col",
+        "nodes": [
+          {
+            "id": "r",
+            "label": "AGENT\nanswer_question()"
+          },
+          {
+            "id": "ret",
+            "label": "RETRIEVER\nvector search"
+          },
+          {
+            "id": "llm",
+            "label": "LLM\nchat completion"
+          },
+          {
+            "id": "tool",
+            "label": "TOOL\nlookup_order"
+          },
+          {
+            "id": "llm2",
+            "label": "LLM\nfinal answer"
+          }
+        ],
+        "edges": [
+          [
+            "r",
+            "ret"
+          ],
+          [
+            "r",
+            "llm"
+          ],
+          [
+            "llm",
+            "tool"
+          ],
+          [
+            "r",
+            "llm2"
+          ]
+        ],
+        "caption": "Set span_type explicitly on @mlflow.trace when autolog can't infer it."
+      }
+    },
+    {
+      "id": "2026-11-24-09",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "supervisor-pattern",
+      "title": "`Command(goto=...)` lets a node route *and* update in one return.",
+      "body": "Instead of a node plus a separate conditional edge, the supervisor returns a `Command`. The `Literal` in the return type tells LangGraph which destinations exist so the graph still draws correctly.",
+      "why": "Cleaner than add_conditional_edges when the decision and the state update belong together.",
+      "code": {
+        "lang": "python",
+        "src": "from typing import Literal\nfrom langgraph.types import Command\n\ndef supervisor(state) -> Command[Literal[\"researcher\", \"writer\", \"__end__\"]]:\n    decision = router_llm.invoke(state[\"messages\"])    # structured output: .next\n    return Command(\n        goto=decision.next,\n        update={\"last_route\": decision.next},\n    )"
+      }
+    },
+    {
+      "id": "2026-11-24-10",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "rag-eval",
+      "title": "DeepEval faithfulness: does the answer stay inside the retrieved context?",
+      "body": "An `LLMTestCase` carries input, actual output and the retrieved chunks. `FaithfulnessMetric` extracts claims from the answer and checks each against the context. `.reason` tells you *which* claim was unsupported.",
+      "why": "Put the `.reason` in your CI log — a score alone never tells you what to fix.",
+      "code": {
+        "lang": "python",
+        "src": "from deepeval.metrics import FaithfulnessMetric\nfrom deepeval.test_case import LLMTestCase\n\ntc = LLMTestCase(input=q, actual_output=answer, retrieval_context=chunks)\nmetric = FaithfulnessMetric(threshold=0.8)\nmetric.measure(tc)\nprint(metric.score, metric.reason)"
+      }
+    },
+    {
+      "id": "2026-11-24-11",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "token-cost-tracking",
+      "title": "One context manager counts tokens across *every* model call inside it.",
+      "body": "`get_usage_metadata_callback()` from `langchain_core.callbacks` yields a handler whose `.usage_metadata` sums input/output tokens per model name for everything invoked inside the `with` block — chains, agents, nested calls.",
+      "why": "Multiply by your price table at the end and you have cost-per-request without touching the agent code."
+    },
+    {
+      "id": "2026-11-24-12",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "react-pattern",
+      "title": "`GraphRecursionError` at 25 — what is being counted?",
+      "body": "LangGraph stops a run after `recursion_limit` supersteps (default 25). A superstep is one round of node execution; in a ReAct loop that is model → tools → model, so 25 supersteps ≈ 12 tool rounds.",
+      "quiz": {
+        "question": "Your agent raises GraphRecursionError. Which number did it exceed?",
+        "options": [
+          "25 tool calls",
+          "25 supersteps (rounds of node execution)",
+          "25 messages in state",
+          "25 000 tokens"
+        ],
+        "answer": 1,
+        "explain": "Supersteps, not tool calls or tokens. Raise it with config={\"recursion_limit\": 50} for legitimately long tasks, but first ask whether the loop is stuck — a stuck agent that gets 50 steps just costs twice as much."
+      }
+    },
+    {
+      "id": "2026-11-24-13",
+      "bucket": "next",
+      "type": "diagram",
+      "topic": "subgraphs",
+      "title": "A subgraph shares state through *overlapping keys* — nothing else crosses the wall.",
+      "body": "When parent and child state schemas share a key (say `messages`), the child reads and writes it directly. Keys only the child has stay private. If the schemas share nothing, wrap the child in a function that translates in and out.",
+      "why": "This is how teams own separate graphs and still compose them.",
+      "diagram": {
+        "direction": "row",
+        "nodes": [
+          {
+            "id": "s",
+            "label": "START",
+            "kind": "terminal"
+          },
+          {
+            "id": "p",
+            "label": "prep"
+          },
+          {
+            "id": "sub",
+            "label": "research\n(compiled subgraph)"
+          },
+          {
+            "id": "w",
+            "label": "write"
+          },
+          {
+            "id": "e",
+            "label": "END",
+            "kind": "terminal"
+          }
+        ],
+        "edges": [
+          [
+            "s",
+            "p"
+          ],
+          [
+            "p",
+            "sub"
+          ],
+          [
+            "sub",
+            "w"
+          ],
+          [
+            "w",
+            "e"
+          ]
+        ],
+        "caption": "parent.add_node('research', research_graph.compile()) — shared key: messages"
+      }
+    },
+    {
+      "id": "2026-11-24-14",
+      "bucket": "next",
+      "type": "code",
+      "topic": "streaming-modes",
+      "title": "Ask for two stream modes and you get `(mode, chunk)` tuples.",
+      "body": "Passing a list to `stream_mode` multiplexes: `messages` yields `(token, metadata)` as the model generates; `updates` yields a dict per finished node. One loop drives both the live text and the progress bar.",
+      "why": "`metadata[\"langgraph_node\"]` tells the UI which node is talking.",
+      "code": {
+        "lang": "python",
+        "src": "for mode, chunk in graph.stream(inputs, config, stream_mode=[\"updates\", \"messages\"]):\n    if mode == \"messages\":\n        token, meta = chunk\n        print(token.content, end=\"\", flush=True)    # live tokens\n    else:\n        print(\"\\n[done]\", list(chunk))               # node that just finished"
+      }
+    },
+    {
+      "id": "2026-11-24-15",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "remove-all-messages",
+      "title": "Summarise, then wipe: the two-write pattern for long chats.",
+      "body": "A summary node returns `{\"summary\": text, \"messages\": [RemoveMessage(id=REMOVE_ALL_MESSAGES), HumanMessage(text)]}`. The reducer clears the list first, then appends the summary as the new first message. Order inside the list matters.",
+      "why": "Without the wipe your context grows forever; without re-inserting the summary the agent forgets everything."
+    },
+    {
+      "id": "2026-11-24-16",
+      "bucket": "next",
+      "type": "quiz",
+      "topic": "finish-reason-standard",
+      "title": "`finish_reason == \"length\"` means the JSON you got is *cut off*.",
+      "body": "The standardised finish reason tells you *why* generation stopped: `stop` (natural), `length` (hit max_tokens), `tool_calls`, `content_filter`. On structured output, `length` almost always means truncated JSON.",
+      "quiz": {
+        "question": "A with_structured_output call fails to parse, and finish_reason is \"length\". Best next step?",
+        "options": [
+          "Retry the identical call — it's random",
+          "Raise max_tokens (or shrink the schema) and retry",
+          "Lower temperature",
+          "Switch to include_raw=False"
+        ],
+        "answer": 1,
+        "explain": "The model ran out of output budget mid-object. Retrying unchanged will hit the same wall. Give it more tokens or ask for less. Checking finish_reason *before* parsing turns a confusing parse error into an obvious one."
+      }
+    },
+    {
+      "id": "2026-11-24-17",
+      "bucket": "next",
+      "type": "code",
+      "topic": "mlflow-online-scorers",
+      "title": "Register a scorer, start it with a sample rate — it then grades live traces.",
+      "body": "In MLflow 3.x a `@scorer` function can be registered to an experiment and started with a `ScorerSamplingConfig`. From then on MLflow runs it on a fraction of new traces and attaches the result as feedback, without you calling evaluate().",
+      "why": "Offline evals catch regressions before deploy; online scorers catch the ones that only show up in real traffic.",
+      "code": {
+        "lang": "python",
+        "src": "import mlflow\nfrom mlflow.genai.scorers import scorer, ScorerSamplingConfig\n\n@scorer\ndef quotes_price(outputs):              # cheap, deterministic check\n    return \"£\" in str(outputs)\n\nmlflow.set_experiment(\"support-agent\")\nquotes_price.register(name=\"quotes_price\")\nquotes_price.start(sampling_config=ScorerSamplingConfig(sample_rate=0.2))"
+      }
+    },
+    {
+      "id": "2026-11-24-18",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "hitl-synthetic-toolmessage",
+      "title": "A rejected tool call *still* needs a ToolMessage — so LangChain fakes one and tags it.",
+      "body": "Provider APIs require one ToolMessage per `tool_call_id` or the next model call errors. When a human rejects a call in HITL middleware, LangChain inserts a synthetic ToolMessage saying it was rejected, and since langchain 1.5.2 tags it with source metadata so traces and evals can tell human rejections from real tool output.",
+      "why": "Filter on that tag when building eval datasets, or your 'tool results' will include things no tool ever said."
+    },
+    {
+      "id": "2026-11-24-19",
+      "bucket": "next",
+      "type": "code",
+      "topic": "send-tool-state",
+      "title": "`InjectedState` gives a tool graph state the model never sees.",
+      "body": "An argument annotated with `InjectedState` is stripped from the schema sent to the model and filled from the current state at call time. Since langgraph 1.2.23, tools dispatched through `Send` see the same state as ones on normal edges.",
+      "why": "User id, tenant, auth token: things a tool needs but the model must never be able to choose.",
+      "code": {
+        "lang": "python",
+        "src": "from typing import Annotated\nfrom langchain_core.tools import tool\nfrom langgraph.prebuilt import InjectedState\n\n@tool\ndef lookup_order(order_id: str, state: Annotated[dict, InjectedState]) -> str:\n    \"\"\"Fetch an order. order_id looks like 'ORD-1042'.\"\"\"\n    user = state[\"user_id\"]              # injected, not in the model's schema\n    return orders_db.get(user, order_id)"
+      }
+    },
+    {
+      "id": "2026-11-24-20",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "model-router-middleware",
+      "title": "Routing by difficulty is now a middleware, not a hand-rolled node.",
+      "body": "langchain 1.5.0 added `ModelRouterMiddleware` (beta) to `create_agent`: a router function inspects the request and returns which model to use for that turn, so the cheap/expensive split from the routing card lives in one pluggable place. Beta means the signature may still move — check the docs before relying on it.",
+      "why": "Same idea as the tiny-classifier router, but the agent loop stays untouched."
+    },
+    {
+      "id": "2026-11-24-21",
+      "bucket": "next",
+      "type": "code",
+      "topic": "stream-retry",
+      "title": "A retried stream *starts over* — your consumer must expect that.",
+      "body": "With langchain-openai 1.8.4+ a 5xx mid-stream is retried under `max_retries`. The retry re-generates from the beginning, so tokens you already showed may be sent again. Buffer per attempt, or reset the UI when a new stream starts.",
+      "why": "Retry is only safe when the consumer is idempotent — same rule as any queue.",
+      "code": {
+        "lang": "python",
+        "src": "from langchain_openai import ChatOpenAI\n\nllm = ChatOpenAI(model=\"gpt-5-mini\", max_retries=3)\nbuf = []\nfor chunk in llm.stream(\"Explain RRF in three lines\"):\n    buf.append(chunk.content)            # commit to the UI only when done\ntext = \"\".join(buf)"
+      }
+    },
+    {
+      "id": "2026-11-24-22",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "langsmith-feedback-cli",
+      "title": "Feedback is the bridge from *traces* to *datasets*.",
+      "body": "A feedback score on a run (from the CLI, the SDK, or a user thumbs-down) is a filterable field. `runs where feedback.correctness < 0.5` is a saved query, and 'add these runs to dataset' is one click. Bad production runs become tomorrow's regression tests.",
+      "why": "Interview framing: trace → feedback → dataset → eval is the loop; feedback is the join key."
+    },
+    {
+      "id": "2026-11-24-23",
+      "bucket": "next",
+      "type": "code",
+      "topic": "durability-modes",
+      "title": "`durability=` trades crash-safety for speed, per call.",
+      "body": "`exit` writes one checkpoint at the end (fastest); `async` writes after each step without waiting (default); `sync` waits for each write before the next step (safest). Same graph, three risk profiles.",
+      "why": "Batch backfills want `exit`; anything with a human waiting on a resume wants `sync`.",
+      "code": {
+        "lang": "python",
+        "src": "cfg = {\"configurable\": {\"thread_id\": \"t1\"}}\n\ngraph.invoke(inputs, cfg, durability=\"exit\")    # one write at the end\ngraph.invoke(inputs, cfg, durability=\"async\")   # default: write after each step\ngraph.invoke(inputs, cfg, durability=\"sync\")    # wait for each write"
+      }
+    },
+    {
+      "id": "2026-11-24-24",
+      "bucket": "next",
+      "type": "code",
+      "topic": "node-retry-policy",
+      "title": "Retry at the *node*, not inside the function.",
+      "body": "`add_node(..., retry_policy=RetryPolicy(...))` retries that node with backoff on the exceptions you name. The node body stays clean, and the retry shows up as repeated attempts in the trace instead of a hidden loop.",
+      "why": "Only retry on transient errors (timeouts, 5xx); retrying a ValueError just burns money.",
+      "code": {
+        "lang": "python",
+        "src": "import httpx\nfrom langgraph.types import RetryPolicy\n\nbuilder.add_node(\n    \"fetch\", fetch_node,\n    retry_policy=RetryPolicy(\n        max_attempts=3, initial_interval=0.5, backoff_factor=2.0,\n        retry_on=httpx.HTTPStatusError,\n    ),\n)"
+      }
+    },
+    {
+      "id": "2026-11-24-25",
+      "bucket": "fresh",
+      "type": "concept",
+      "topic": "proactive-agents",
+      "title": "Proactive agents run on *events and schedules*, not on chat turns.",
+      "body": "LangChain's write-up on building proactive agents names three triggers (real-world events, developer schedules, agent-set schedules) and three memory signals (seed, feedback, outcome). A background 'dreaming' job updates memory from recent traces. Over 70% of runs on Managed Deep Agents now start from a schedule.",
+      "why": "The hard parts they list — salience, expiry, duplication — are memory problems, not prompting problems. This feed is itself a scheduled agent.",
+      "source": "https://www.langchain.com/blog/what-weve-learned-building-proactive-agents"
+    },
+    {
+      "id": "2026-11-24-26",
+      "bucket": "fresh",
+      "type": "quiz",
+      "topic": "langsmith-trace-privacy",
+      "title": "Hide the payload, keep the shape: new LangSmith trace privacy controls.",
+      "body": "Three Enterprise controls landed on 17 Nov: hide trace inputs/outputs while keeping the run tree, latency and cost; user groups with per-workspace permissions; and trace-level ABAC policies keyed on root-run metadata such as customer id.",
+      "quiz": {
+        "question": "Your on-call engineers must debug slow agent runs but must never read customer messages. Which control fits?",
+        "options": [
+          "Delete traces after 24h",
+          "Hide inputs/outputs while keeping the run tree, latency and cost visible",
+          "Give on-call read access to one workspace only",
+          "Turn tracing off in production"
+        ],
+        "answer": 1,
+        "explain": "Latency debugging needs the span tree and timings, not the text. Hiding payloads keeps exactly that. Workspace scoping controls *which* traces, not *which fields*; deleting or disabling throws away the signal you need."
+      },
+      "source": "https://www.langchain.com/blog/protect-sensitive-data-in-your-traces-new-controls-in-langsmith"
+    },
+    {
+      "id": "2026-11-24-27",
+      "bucket": "fresh",
+      "type": "concept",
+      "topic": "langsmith-outcomes",
+      "title": "Cost per *merged PR*: LangSmith 'outcomes' tie agent threads to results.",
+      "body": "Public beta on LangSmith Cloud (18 Nov): an outcome links a GitHub PR or GitLab MR to the coding-agent threads that produced it. Spend is split by PR state (open/closed/merged) and 'unattributed', and threads are labelled by work type. Supports Claude Code, Codex, Cursor, Copilot and Deep Agents.",
+      "why": "Token cost per request is an engineering metric; cost per shipped change is the one a manager asks for.",
+      "source": "https://www.langchain.com/blog/langsmith-coding-agents-roi"
+    },
+    {
+      "id": "2026-11-24-28",
+      "bucket": "fresh",
+      "type": "diagram",
+      "topic": "langsmith-tool-gateway",
+      "title": "Tool Gateway: one MCP URL, policies in the middle, every call traced.",
+      "body": "Public beta (19 Nov). A 'tool kit' is exposed at a single URL (with a search mode for big kits). Each call runs as the user (OAuth on first use) or as the agent (profiles). Deny and approval policies sit in front; the audit log is Enterprise-only.",
+      "why": "This is guardrails-as-infrastructure: the deny policy lives outside the prompt, so the model cannot talk its way past it.",
+      "diagram": {
+        "direction": "row",
+        "nodes": [
+          {
+            "id": "a",
+            "label": "agent"
+          },
+          {
+            "id": "g",
+            "label": "gateway URL\n(tool kit)"
+          },
+          {
+            "id": "p",
+            "label": "policy\ndeny / approve"
+          },
+          {
+            "id": "au",
+            "label": "auth\nuser OAuth | agent profile"
+          },
+          {
+            "id": "m",
+            "label": "MCP server\nGitHub, Linear, Google…"
+          },
+          {
+            "id": "t",
+            "label": "trace"
+          }
+        ],
+        "edges": [
+          [
+            "a",
+            "g"
+          ],
+          [
+            "g",
+            "p"
+          ],
+          [
+            "p",
+            "au"
+          ],
+          [
+            "au",
+            "m"
+          ],
+          [
+            "g",
+            "t"
+          ]
+        ],
+        "caption": "Built-in servers: Google, Microsoft, Salesforce, GitHub, Linear."
+      },
+      "source": "https://www.langchain.com/blog/langsmith-tool-gateway"
+    },
+    {
+      "id": "2026-11-24-29",
+      "bucket": "fresh",
+      "type": "concept",
+      "topic": "governance-observability",
+      "title": "Preventive vs detective: two halves of agent governance.",
+      "body": "LangChain's governance post splits controls into *preventive* (runtime guardrails, pre-production evals) and *detective* (online evals, alerts, drift detection). Their number: across 16,000+ production agents, 87% of teams had tracing in place before first deploy.",
+      "why": "Map your own stack: guardrail nodes and CI evals are preventive; online scorers and LangSmith alerts are detective. Most teams only have the first half.",
+      "source": "https://www.langchain.com/blog/agent-governance-observability"
+    },
+    {
+      "id": "2026-11-24-30",
+      "bucket": "fresh",
+      "type": "diagram",
+      "topic": "knowledge-factory",
+      "title": "A 'knowledge factory': agents flag gaps, a curator agent fixes the store.",
+      "body": "Harrison Chase's post (21 Nov) describes three kinds of knowledge — skills, domain knowledge, data-access guidance — and a loop: working agents call a tool to flag missing or wrong knowledge; a scheduled curator agent reads the flags, raw sources (Notion, Slack) and traces, then updates the store (skill files in GitHub or LangSmith Context Hub).",
+      "why": "Memory for one user is the Store. Knowledge for all agents is this loop.",
+      "diagram": {
+        "direction": "row",
+        "nodes": [
+          {
+            "id": "w",
+            "label": "working agents"
+          },
+          {
+            "id": "f",
+            "label": "flag_gap()\ntool"
+          },
+          {
+            "id": "c",
+            "label": "curator agent\n(scheduled)"
+          },
+          {
+            "id": "src",
+            "label": "Notion / Slack\n+ traces"
+          },
+          {
+            "id": "k",
+            "label": "knowledge store\nskills · domain · data guide"
+          }
+        ],
+        "edges": [
+          [
+            "w",
+            "f"
+          ],
+          [
+            "f",
+            "c"
+          ],
+          [
+            "src",
+            "c"
+          ],
+          [
+            "c",
+            "k"
+          ],
+          [
+            "k",
+            "w"
+          ]
+        ],
+        "caption": "Flags + raw sources + traces in; updated skills out."
+      },
+      "source": "https://www.langchain.com/blog/knowledge-factory"
+    }
+  ]
+}
