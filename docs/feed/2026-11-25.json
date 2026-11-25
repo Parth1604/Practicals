@@ -1,0 +1,575 @@
+{
+  "date": "2026-11-25",
+  "generated_by": "nightly-task",
+  "cards": [
+    {
+      "id": "2026-11-25-01",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "langchain-vs-langgraph",
+      "title": "LangChain answers *what*. LangGraph answers *what next*.",
+      "body": "A LangChain runnable is a recipe: prompt → model → parser, start to finish, same every time. LangGraph is the kitchen timer and the sous-chef: it decides whether to go back to the stove, pauses for your approval, and remembers where it stopped. Same ingredients (models, tools, retrievers); only the control flow is different.",
+      "why": "If you can draw the flow as a straight line, stay in LangChain. The first arrow that points backwards is the moment you need a graph."
+    },
+    {
+      "id": "2026-11-25-02",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "agent-ladder",
+      "title": "You climb a rung the moment the *model* decides where to go next.",
+      "body": "Chain, agent, multi-agent: the code reuses the same model and tools at every rung. What changes is who owns control flow — you (chain), the model (agent), or several models negotiating (multi-agent).",
+      "quiz": {
+        "question": "You add 'if the answer cites nothing, search again and retry' to a RAG chain. Which rung did you just step onto?",
+        "options": [
+          "Still a chain — it is just an if-statement",
+          "Agent — control flow now depends on model output and can loop",
+          "Multi-agent — the retriever and the answerer are two agents",
+          "Subgraph — a loop always needs its own graph"
+        ],
+        "answer": 1,
+        "explain": "A loop whose exit is decided by what the model produced is the definition of an agent, however small. Nothing about multiple agents is involved yet; that rung starts when a second model gets its own prompt, tools and context."
+      }
+    },
+    {
+      "id": "2026-11-25-03",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "rag-chunking",
+      "title": "Search on small chunks, answer with big ones.",
+      "body": "Embeddings match best on short, focused text. LLMs answer best with surrounding context. Parent-document retrieval decouples the two: embed 200-char children, but hand the LLM the 2000-char parent each child points to.",
+      "quiz": {
+        "question": "Your 200-char chunks retrieve the right passages, but the LLM lacks enough context to answer. You do not want to re-embed everything. Cheapest fix?",
+        "options": [
+          "Raise k from 5 to 25",
+          "Store a parent_id on each chunk and return the parent at query time",
+          "Switch to a bigger embedding model",
+          "Add chunk_overlap=100"
+        ],
+        "answer": 1,
+        "explain": "The retriever keeps matching on the small, precise chunks; only what you *return* changes. LangChain's ParentDocumentRetriever does exactly this with a docstore keyed by parent id. More k adds noise, a new embedder forces a re-index, and overlap does not grow context meaningfully."
+      }
+    },
+    {
+      "id": "2026-11-25-04",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "tools-docstring",
+      "title": "A tool that *raises* kills the loop. A ToolException becomes an observation.",
+      "body": "By default an exception inside a tool propagates and the agent run dies. Raise `ToolException` with `handle_tool_error=True` and the message is returned as the ToolMessage content instead — the model reads it and corrects its own call.",
+      "why": "Validation text you write in the exception is effectively a second docstring, shown only when the model gets it wrong.",
+      "code": {
+        "lang": "python",
+        "src": "from langchain_core.tools import StructuredTool, ToolException\n\ndef get_order(order_id: str) -> str:\n    \"\"\"Fetch an order by numeric id, e.g. '10042'.\"\"\"\n    if not order_id.isdigit():\n        raise ToolException(f\"order_id must be digits, got {order_id!r}\")\n    return db.get(order_id)\n\nget_order_tool = StructuredTool.from_function(get_order, handle_tool_error=True)\n# model calls get_order(\"Acme Ltd\") -> ToolMessage(\"order_id must be digits...\") -> retries with the id"
+      }
+    },
+    {
+      "id": "2026-11-25-05",
+      "bucket": "reinforce",
+      "type": "diagram",
+      "topic": "observability-lanes",
+      "title": "Dev, CI, prod — each lane asks a different question.",
+      "body": "Tracing in dev answers *what happened*. A golden dataset in CI answers *did this change regress*. Online scorers in prod answer *is it still good on real traffic*. Same trace format flows through all three; failures found downstream become examples upstream.",
+      "why": "Interviewers asking 'how do you evaluate agents' want to hear all three lanes and the arrow that feeds prod failures back into the CI dataset.",
+      "diagram": {
+        "direction": "row",
+        "nodes": [
+          {
+            "id": "dev",
+            "label": "DEV\\nLangSmith trace\\n'what happened?'"
+          },
+          {
+            "id": "ci",
+            "label": "CI\\nDeepEval on golden set\\n'did it regress?'"
+          },
+          {
+            "id": "prod",
+            "label": "PROD\\nonline scorers + alerts\\n'still good?'",
+            "kind": "terminal"
+          }
+        ],
+        "edges": [
+          [
+            "dev",
+            "ci"
+          ],
+          [
+            "ci",
+            "prod"
+          ],
+          [
+            "prod",
+            "ci"
+          ]
+        ],
+        "caption": "prod → ci: every real failure becomes a new dataset example."
+      }
+    },
+    {
+      "id": "2026-11-25-06",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "send-fanout",
+      "title": "Each Send() carries its *own* state — the worker never sees the global one.",
+      "body": "`Send(node, payload)` invokes the node with `payload` as its state. Five Sends to the same node mean five independent invocations, each seeing only its payload. The results come back together through the reducer on the parent key.",
+      "quiz": {
+        "question": "A planner returns [Send('write', {'section': s}) for s in sections]. Inside `write`, what does `state` contain?",
+        "options": [
+          "The full graph state plus a 'section' key",
+          "Only {'section': s} for that one Send",
+          "A list of all sections",
+          "Whatever the previous Send returned"
+        ],
+        "answer": 1,
+        "explain": "The payload *is* the worker's input state. If a worker needs something global (the user's question, say), the planner must put it into every payload. This is why worker state is usually a separate small TypedDict."
+      }
+    },
+    {
+      "id": "2026-11-25-07",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "interrupt",
+      "title": "The paused value is waiting in `result['__interrupt__']`.",
+      "body": "When a node calls `interrupt(value)`, `invoke()` returns normally with an `__interrupt__` key holding the payload you passed. Show it to a human, then call `invoke(Command(resume=answer), cfg)` — the node re-runs and `interrupt()` returns `answer`.",
+      "why": "UIs do not poll for 'is it paused' — they read `__interrupt__` from the response and render whatever the node put there.",
+      "code": {
+        "lang": "python",
+        "src": "from langgraph.types import interrupt, Command\n\ndef approve(state):\n    ok = interrupt({\"question\": \"Send this?\", \"draft\": state[\"draft\"]})\n    return {\"sent\": ok}\n\ncfg = {\"configurable\": {\"thread_id\": \"t1\"}}\nres = graph.invoke({\"draft\": \"hi\"}, cfg)\nres[\"__interrupt__\"][0].value    # {'question': 'Send this?', 'draft': 'hi'}\ngraph.invoke(Command(resume=True), cfg)   # approve() re-runs; interrupt() returns True"
+      }
+    },
+    {
+      "id": "2026-11-25-08",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "prompt-versioning",
+      "title": "Every trace should say *which prompt commit* wrote it.",
+      "body": "Pulling `client.pull_prompt('support-bot:prod')` gives you a prompt pinned to a commit hash. Put that hash into run metadata. Now a bad answer in LangSmith is one filter away from the exact prompt text that produced it, and promoting a new commit to `prod` is a tag move, not a deploy.",
+      "why": "'How do you roll back a prompt change?' — move the tag back. If you cannot answer that in one sentence, prompts are not really versioned."
+    },
+    {
+      "id": "2026-11-25-09",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "deep-agents-pattern",
+      "title": "The filesystem is where deep agents put what will not fit in context.",
+      "body": "A deep agent has four parts: a planner (todo list), sub-agents (fresh context), a filesystem (offload), and a long system prompt. Each solves a different context-window problem.",
+      "quiz": {
+        "question": "Your deep agent reads a 40-file repo and the context window overflows on file 12. Which part of the pattern is meant to prevent this?",
+        "options": [
+          "The todo-list planner",
+          "Sub-agents with fresh context",
+          "The filesystem: write large tool results to files and read back slices",
+          "A longer system prompt with instructions to skim"
+        ],
+        "answer": 2,
+        "explain": "Large tool outputs go to files; the agent keeps a path plus a summary in context and reads back only the lines it needs. Sub-agents isolate *tasks*, not individual oversized results. The planner only orders work. Prompting to 'skim' does not reduce what the tool returns."
+      }
+    },
+    {
+      "id": "2026-11-25-10",
+      "bucket": "reinforce",
+      "type": "diagram",
+      "topic": "eval-datasets-in-ci",
+      "title": "An eval gate is a diff against a pinned baseline, not a pass/fail on absolute scores.",
+      "body": "On every PR: run the golden dataset through the agent, score it, compare the mean per metric to the baseline run, and block if any metric drops more than a tolerance. Absolute thresholds rot as the dataset grows; a diff does not.",
+      "why": "The baseline is just the last run on main. Store its run id and the gate becomes one comparison call.",
+      "diagram": {
+        "direction": "row",
+        "nodes": [
+          {
+            "id": "pr",
+            "label": "PR opened"
+          },
+          {
+            "id": "ev",
+            "label": "evaluate(agent, golden set)"
+          },
+          {
+            "id": "cmp",
+            "label": "compare to baseline run"
+          },
+          {
+            "id": "ok",
+            "label": "merge",
+            "kind": "terminal"
+          },
+          {
+            "id": "no",
+            "label": "block + link to failing examples",
+            "kind": "terminal"
+          }
+        ],
+        "edges": [
+          [
+            "pr",
+            "ev"
+          ],
+          [
+            "ev",
+            "cmp"
+          ],
+          [
+            "cmp",
+            "ok"
+          ],
+          [
+            "cmp",
+            "no"
+          ]
+        ],
+        "caption": "MLflow compare_evaluations() or a LangSmith experiment comparison does the cmp step."
+      }
+    },
+    {
+      "id": "2026-11-25-11",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "guardrails",
+      "title": "An input guardrail is one node and one conditional edge.",
+      "body": "Check the input, write a flag to state, route on the flag. The agent node never runs on blocked input, which is cheaper and safer than asking the model to refuse.",
+      "why": "Prompt-only guardrails can be argued with. A node cannot.",
+      "code": {
+        "lang": "python",
+        "src": "from langgraph.graph import StateGraph, START, END\nBLOCK = (\"ssn\", \"password\")\n\ndef gate(state):\n    return {\"blocked\": any(w in state[\"question\"].lower() for w in BLOCK)}\ndef route(state): return \"refuse\" if state[\"blocked\"] else \"agent\"\n\ng = StateGraph(State)\ng.add_node(\"gate\", gate); g.add_node(\"agent\", agent); g.add_node(\"refuse\", refuse)\ng.add_edge(START, \"gate\")\ng.add_conditional_edges(\"gate\", route, {\"refuse\": \"refuse\", \"agent\": \"agent\"})\ng.add_edge(\"refuse\", END); g.add_edge(\"agent\", END)"
+      }
+    },
+    {
+      "id": "2026-11-25-12",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "subgraphs",
+      "title": "Different schemas? Wrap the subgraph in a node that translates.",
+      "body": "If parent and child share state keys, add the compiled subgraph directly as a node. If they do not, write a plain function that builds the child's input from parent state, calls `child.invoke(...)`, and maps the result back. The wrapper is the adapter; the subgraph stays reusable.",
+      "why": "This is how one 'research' subgraph serves three different parent graphs with three different state shapes.",
+      "code": {
+        "lang": "python",
+        "src": "def research_node(state: ParentState):\n    out = research_graph.invoke({\"query\": state[\"question\"]})   # child schema\n    return {\"evidence\": out[\"docs\"]}                              # back to parent schema\n\ng.add_node(\"research\", research_node)"
+      }
+    },
+    {
+      "id": "2026-11-25-13",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "langgraph-dev-go-core",
+      "title": "A local SQLite file under `langgraph dev` means your threads outlive a restart.",
+      "body": "The old dev server kept checkpoints in memory, so every code reload wiped your test conversations. With the Go core backed by SQLite, a thread you started before the restart is still there afterwards — same thread_id, same history. That makes local HITL testing (interrupt, resume, time travel) realistic.",
+      "why": "Test 'resume after crash' on your laptop before trusting it in Agent Server."
+    },
+    {
+      "id": "2026-11-25-14",
+      "bucket": "next",
+      "type": "code",
+      "topic": "langsmith-gateway-routing",
+      "title": "A gateway is a model-shaped proxy: one `base_url`, policies in the middle.",
+      "body": "Point the client at the LangSmith LLM Gateway instead of the provider. Routing, rate limits, cooldowns and user-group policies apply there, and every call is traced. The new `X-LangSmith-Provider-Key` header lets a single request carry its own provider key, so per-tenant keys do not need per-tenant deployments.",
+      "why": "Swapping the provider for a tenant becomes a gateway policy change, not a code change.",
+      "code": {
+        "lang": "python",
+        "src": "from langchain_openai import ChatOpenAI\n\nllm = ChatOpenAI(\n    model=\"gpt-4.1-mini\",\n    base_url=GATEWAY_URL,                     # LangSmith LLM Gateway, OpenAI-compatible\n    api_key=LANGSMITH_API_KEY,\n    default_headers={\"X-LangSmith-Provider-Key\": tenant_openai_key},  # per-request provider key\n)"
+      },
+      "source": "https://docs.langchain.com/langsmith/changelog"
+    },
+    {
+      "id": "2026-11-25-15",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "langsmith-cli-investigate",
+      "title": "Pipe the `langsmith` CLI into `jq` — output is JSON when stdout is not a terminal.",
+      "body": "The CLI now switches to JSON automatically when piped or redirected (until 1.0 it still prints pretty and warns, so pass `--format json` explicitly). Combined with `investigate` and `verify --since`, that turns trace triage into shell scripts you can run from CI or cron.",
+      "why": "An on-call runbook that is a shell one-liner beats one that says 'open the UI and click'.",
+      "code": {
+        "lang": "bash",
+        "src": "langsmith evaluators rule list --type project -n 20 --format json \\\n  | jq -r '.rules[] | \"\\(.name)\\t\\(.id)\"'\n# paginate with .cursors.next:\nlangsmith evaluators rule list --cursor \"$(... | jq -r .cursors.next)\" --format json"
+      },
+      "source": "https://docs.langchain.com/langsmith/changelog"
+    },
+    {
+      "id": "2026-11-25-16",
+      "bucket": "next",
+      "type": "code",
+      "topic": "model-router-middleware",
+      "title": "`@wrap_model_call` is where you swap the model per request.",
+      "body": "Agent middleware wraps the model call. Inspect the request (messages, tools), pick a model, and hand the overridden request to `handler`. The agent loop, tools and state are untouched — only the model behind one call changes.",
+      "why": "The same hook does fallbacks, caching, and prompt caching; routing is just the first thing you will use it for.",
+      "code": {
+        "lang": "python",
+        "src": "from langchain.agents import create_agent\nfrom langchain.agents.middleware import wrap_model_call\nfrom langchain.chat_models import init_chat_model\n\ncheap = init_chat_model(\"openai:gpt-4.1-mini\")\nstrong = init_chat_model(\"anthropic:claude-sonnet-4-5\")\n@wrap_model_call\ndef route(request, handler):\n    hard = len(request.messages) > 10 or \"analyze\" in str(request.messages[-1].content).lower()\n    return handler(request.override(model=strong if hard else cheap))\n\nagent = create_agent(cheap, tools=[search], middleware=[route])"
+      }
+    },
+    {
+      "id": "2026-11-25-17",
+      "bucket": "next",
+      "type": "quiz",
+      "topic": "durability-modes",
+      "title": "`sync`, `async`, `exit` — three answers to 'when is the checkpoint written?'",
+      "body": "`durability='sync'` writes the checkpoint before the next step starts. `'async'` writes it in the background while the next step runs. `'exit'` writes only when the run finishes. Faster to the right, safer to the left.",
+      "quiz": {
+        "question": "A node charges a credit card. If the process dies right after, the run must resume *after* the charge, never repeat it. Which durability mode?",
+        "options": [
+          "exit — fewest writes, fastest",
+          "async — checkpoint still gets written eventually",
+          "sync — the checkpoint lands before anything else runs",
+          "Durability does not matter; use a retry policy"
+        ],
+        "answer": 2,
+        "explain": "With async, the process can die after the charge but before the background write finishes, and the resume re-runs the charge. sync guarantees the post-charge checkpoint exists before the graph moves on. A retry policy makes it *worse*: it repeats the node. Pay the latency on the steps that have side effects; use async everywhere else."
+      }
+    },
+    {
+      "id": "2026-11-25-18",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "node-retry-policy",
+      "title": "Retry only what is *transient*: `retry_on` is the important argument.",
+      "body": "`RetryPolicy(max_attempts=3)` retries every exception, including a `KeyError` from your own bug — three times, slowly. Pass `retry_on=` a tuple of exception types (timeouts, 5xx, rate limits) so real bugs fail fast and flaky network calls get another go.",
+      "why": "A retry loop hiding a logic error is the classic 'why is this node taking 40 seconds to crash' incident.",
+      "code": {
+        "lang": "python",
+        "src": "import httpx\nfrom langgraph.types import RetryPolicy\n\ng.add_node(\"fetch\", fetch,\n    retry_policy=RetryPolicy(max_attempts=3, backoff_factor=2.0,\n                             retry_on=(httpx.TimeoutException, httpx.HTTPStatusError)))"
+      }
+    },
+    {
+      "id": "2026-11-25-19",
+      "bucket": "next",
+      "type": "diagram",
+      "topic": "proactive-agents",
+      "title": "A proactive agent has three doors in and three doors out.",
+      "body": "In: an external event, a developer cron, or a heartbeat the agent set itself. Out: act, ask a human, or — deliberately — do nothing. Memory sits in the middle so the agent recognises 'I already handled this' and does not spam. Most of the engineering is in the *do nothing* branch.",
+      "why": "Notification overload is the failure mode LangChain names first. If your agent cannot choose silence, it will be muted.",
+      "diagram": {
+        "direction": "row",
+        "nodes": [
+          {
+            "id": "trig",
+            "label": "trigger\\nevent | cron | heartbeat"
+          },
+          {
+            "id": "mem",
+            "label": "memory\\nseen? expired? duplicate?"
+          },
+          {
+            "id": "agent",
+            "label": "agent\\ndecide"
+          },
+          {
+            "id": "act",
+            "label": "act",
+            "kind": "terminal"
+          },
+          {
+            "id": "ask",
+            "label": "ask a human",
+            "kind": "terminal"
+          },
+          {
+            "id": "none",
+            "label": "do nothing",
+            "kind": "terminal"
+          }
+        ],
+        "edges": [
+          [
+            "trig",
+            "mem"
+          ],
+          [
+            "mem",
+            "agent"
+          ],
+          [
+            "agent",
+            "act"
+          ],
+          [
+            "agent",
+            "ask"
+          ],
+          [
+            "agent",
+            "none"
+          ]
+        ],
+        "caption": "This feed is the 'cron' door; the memory is profile.json."
+      }
+    },
+    {
+      "id": "2026-11-25-20",
+      "bucket": "next",
+      "type": "code",
+      "topic": "langsmith-trace-privacy",
+      "title": "`hide_inputs` / `hide_outputs`: scrub before it leaves the process.",
+      "body": "The LangSmith `Client` takes functions that transform run inputs and outputs before upload. Return a redacted dict and the trace keeps its shape — spans, timings, tool names — while the payload never reaches the server. `LANGSMITH_HIDE_INPUTS=true` is the blunt version that blanks everything.",
+      "why": "Engineers can still debug 'which tool was slow'; they just cannot read the customer's message.",
+      "code": {
+        "lang": "python",
+        "src": "from langsmith import Client, tracing_context\n\ndef scrub(d: dict) -> dict:\n    return {k: (\"<hidden>\" if k in {\"messages\", \"input\", \"query\"} else v) for k, v in d.items()}\n\nclient = Client(hide_inputs=scrub, hide_outputs=scrub)\n\nwith tracing_context(client=client):\n    agent.invoke({\"messages\": [(\"user\", customer_text)]})   # traced, payload redacted"
+      }
+    },
+    {
+      "id": "2026-11-25-21",
+      "bucket": "next",
+      "type": "diagram",
+      "topic": "langsmith-outcomes",
+      "title": "Cost per merged PR needs one link: agent record → repo.",
+      "body": "An agent record of type *coding* connects to a GitHub repo. LangSmith then joins traces (tokens, cost) to the repo's PRs and reports merge rate and cost per *merged* PR. The metric that matters for ROI is only possible because the agent is a first-class object with an ID, not a flat project of runs.",
+      "why": "'Tokens per day' tells you the bill. 'Dollars per merged PR' tells you whether to keep paying it.",
+      "diagram": {
+        "direction": "row",
+        "nodes": [
+          {
+            "id": "rec",
+            "label": "agent record\\ntype=coding, id, owner"
+          },
+          {
+            "id": "tr",
+            "label": "traces\\ntokens, cost, harness"
+          },
+          {
+            "id": "gh",
+            "label": "GitHub repo\\nPRs opened / merged"
+          },
+          {
+            "id": "out",
+            "label": "outcome report\\nmerge rate, $ per merged PR",
+            "kind": "terminal"
+          }
+        ],
+        "edges": [
+          [
+            "rec",
+            "tr"
+          ],
+          [
+            "rec",
+            "gh"
+          ],
+          [
+            "tr",
+            "out"
+          ],
+          [
+            "gh",
+            "out"
+          ]
+        ],
+        "caption": "MCP tool get_coding_agent_report returns the same numbers, windows up to two weeks."
+      },
+      "source": "https://www.langchain.com/blog/langsmith-coding-agents-roi"
+    },
+    {
+      "id": "2026-11-25-22",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "langsmith-tool-gateway",
+      "title": "Policies belong in the gateway, not in the prompt.",
+      "body": "The Tool Gateway sits between agents and MCP servers. Which agent may call which tool, with what arguments, how often, is a policy evaluated per call — and every call is traced with the policy decision. The prompt says 'never delete'; the gateway *enforces* it. Breaking change this week: policies match on `user_group_ids`, not `team_id`.",
+      "why": "Security review question: 'what stops the agent from calling the destructive tool?' If the answer starts with 'the system prompt says', you lose.",
+      "source": "https://www.langchain.com/blog/langsmith-tool-gateway"
+    },
+    {
+      "id": "2026-11-25-23",
+      "bucket": "next",
+      "type": "quiz",
+      "topic": "governance-observability",
+      "title": "Preventive stops it. Detective tells you it happened.",
+      "body": "Preventive controls act *before* the call: allow-lists, gateway policies, input guardrails. Detective controls act *after*: alert rules on traces, online scorers, Engine issues. You need both; observability is what makes the detective half possible and what tells you which preventive rules to add.",
+      "quiz": {
+        "question": "An alert rule fires when tool-call error rate in production exceeds 5% over 10 minutes. Which kind of control is that?",
+        "options": [
+          "Preventive — it stops bad calls",
+          "Detective — it observes and reports after the fact",
+          "Both, because the alert can page someone",
+          "Neither; alerts are not governance"
+        ],
+        "answer": 1,
+        "explain": "The errors already happened; the rule surfaces them. Paging a human does not change that classification. The preventive counterpart would be a gateway policy that rejects the failing tool calls, or a retry/circuit-breaker node that stops them from reaching the tool."
+      }
+    },
+    {
+      "id": "2026-11-25-24",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "knowledge-factory",
+      "title": "Agents are the best sensors for missing documentation.",
+      "body": "Every time an agent answers 'I could not find X' it has discovered a gap in the knowledge store. Log that as a structured event (question, what was searched, what was missing), route the gaps to a curator agent or a human, and the store grows exactly where real questions hit it. Retrieval quality improves without anyone guessing what to document.",
+      "why": "Turn the RAG eval 'context recall' failures into tickets and you already have a knowledge factory."
+    },
+    {
+      "id": "2026-11-25-25",
+      "bucket": "fresh",
+      "type": "concept",
+      "topic": "durable-runs-resume",
+      "title": "Agent Server now re-queues in-flight runs when a replica shuts down.",
+      "body": "This week's LangSmith changelog: on Postgres-backed Agent Server, a run that was mid-flight when its replica was killed (deploy, scale-down, crash) is picked up again at the last step boundary instead of being lost. It needs LangGraph 1.2.15+ in your graph; the server ships 1.2.20.",
+      "why": "This is checkpointing paying off at the platform level: a checkpoint after every node is what makes 'resume at the step boundary' possible at all.",
+      "source": "https://docs.langchain.com/langsmith/changelog"
+    },
+    {
+      "id": "2026-11-25-26",
+      "bucket": "fresh",
+      "type": "code",
+      "topic": "evaluate-upload-runs",
+      "title": "`evaluate(..., upload_runs=...)` decides whether target traces get uploaded.",
+      "body": "New this week in the LangSmith SDK changelog: `evaluate()` and `aevaluate()` accept `upload_runs`. Set it `False` to score a dataset without pushing the target's traces, or pass a callable to choose per run. Scores still land in the experiment; only the trace payloads are skipped.",
+      "why": "Fast local iteration on an evaluator no longer floods the project with throwaway traces.",
+      "code": {
+        "lang": "python",
+        "src": "from langsmith import evaluate\n\n# keep scores, skip uploading the target's traces\nres = evaluate(app, data=\"support-golden\", evaluators=[correct], upload_runs=False)\n\n# or upload only the interesting ones\nres = evaluate(app, data=\"support-golden\", evaluators=[correct],\n               upload_runs=lambda run: run.error is not None)"
+      },
+      "source": "https://docs.langchain.com/langsmith/changelog"
+    },
+    {
+      "id": "2026-11-25-27",
+      "bucket": "fresh",
+      "type": "code",
+      "topic": "tracing-context-inherit",
+      "title": "`tracing_context(inherit_parent_tags_and_metadata=False)` starts a clean slate.",
+      "body": "Nested `tracing_context` blocks used to merge tags and metadata from the enclosing block. The new flag lets an inner block drop the parent's tags and metadata so a scratch call, a sub-evaluation, or a tenant switch does not inherit labels that do not apply.",
+      "why": "Tags drive filters and alerts; an inherited `prod` tag on a test run is how you page yourself at 3am.",
+      "code": {
+        "lang": "python",
+        "src": "from langsmith import tracing_context, traceable\n\n@traceable\ndef step(x): return x * 2\n\nwith tracing_context(tags=[\"nightly\"], metadata={\"job\": \"feed\"}):\n    step(1)                                                       # tags: nightly\n    with tracing_context(tags=[\"scratch\"], inherit_parent_tags_and_metadata=False):\n        step(2)                                                   # tags: scratch only, no job metadata"
+      },
+      "source": "https://docs.langchain.com/langsmith/changelog"
+    },
+    {
+      "id": "2026-11-25-28",
+      "bucket": "fresh",
+      "type": "quiz",
+      "topic": "thread-transcript-endpoint",
+      "title": "New: `GET /threads/{id}/transcript` — turns, newest first, with a replay `position`.",
+      "body": "Agent Server added a transcript endpoint: paginated turns (not raw checkpoints), each with a `position` you can hand to the stream endpoint to replay events newer than it. Bad `limit`, `format`, `cursor` or `position` return 422. A cursor that points off the active branch returns 410.",
+      "quiz": {
+        "question": "A client stored a transcript cursor, then someone time-travelled the thread and forked it from an earlier checkpoint. The client pages again and gets 410 Gone. Why?",
+        "options": [
+          "The thread was deleted",
+          "The cursor points at a turn on a branch that is no longer the active one",
+          "Pagination limits expire after 24h",
+          "422 and 410 are interchangeable here"
+        ],
+        "answer": 1,
+        "explain": "A fork makes a new checkpoint chain the active branch; turns from the abandoned branch are still stored but are not part of the transcript any more. 410 tells the client to restart from the top rather than retry. 422 is for malformed parameters, a different failure."
+      },
+      "source": "https://docs.langchain.com/langsmith/changelog"
+    },
+    {
+      "id": "2026-11-25-29",
+      "bucket": "fresh",
+      "type": "concept",
+      "topic": "openai-stream-toolcall-args",
+      "title": "langchain-openai 1.8.5: streamed Responses API tool-call arguments are no longer dropped.",
+      "body": "A fix shipped on 19 Nov: when streaming through the OpenAI Responses API, tool-call argument deltas could be lost, leaving the agent with a tool name and empty arguments. 1.8.5 preserves them. If your streaming agent on the Responses API saw mysterious `{}` tool calls, this was it.",
+      "why": "Streaming bugs look like model bugs. Check the integration version before you rewrite the prompt.",
+      "source": "https://github.com/langchain-ai/langchain/releases/tag/langchain-openai%3D%3D1.8.5"
+    },
+    {
+      "id": "2026-11-25-30",
+      "bucket": "fresh",
+      "type": "concept",
+      "topic": "tasks-to-goals",
+      "title": "From tasks to goals: the agent picks its own to-do list.",
+      "body": "Harrison Chase's post names the shift from 'write this email' to 'keep the blog healthy'. Six consequences: the agent generates tasks (so show it a visible todo list), tool use becomes unpredictable (finer tool controls), it needs a channel to ask humans, feedback comes from metrics *and* people, it needs triggers plus stop/pause/ignore, and memory matters more — a rejected idea must shape the next one.",
+      "why": "Every one of those six maps to a LangGraph primitive you already know: Store, interrupt, cron triggers, feedback → datasets.",
+      "source": "https://www.langchain.com/blog/from-tasks-to-goals"
+    }
+  ]
+}
