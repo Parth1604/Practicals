@@ -1,0 +1,600 @@
+{
+  "date": "2026-11-26",
+  "generated_by": "nightly-task",
+  "cards": [
+    {
+      "id": "2026-11-26-01",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "langchain-vs-langgraph",
+      "title": "Draw it. If every arrow points forward, it is a chain. One arrow back and you need a graph.",
+      "body": "A chain is a DAG: prompt → model → parser, each step runs once. The moment an arrow points backwards — 'retry the search', 'ask the model again', 'wait for a human' — you have a cycle, and cycles need state that survives the loop. That state object is what LangGraph adds; everything else is the same LangChain parts.",
+      "why": "Interview answer in one breath: 'LangGraph is LangChain plus cycles and persistence.' The drawing test tells you which one to reach for before you write code."
+    },
+    {
+      "id": "2026-11-26-02",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "agent-ladder",
+      "title": "Same two tools, three rungs — the only thing that grows is *who decides the next step*.",
+      "body": "Rung 1: you call the tool, then the model. Rung 2: `create_agent` lets the model decide whether and which tool to call, in a loop. Rung 3: a supervisor model decides which *agent* runs. Nothing about the tools changes; the control flow moves one level up each time.",
+      "why": "This is the mental model that connects chains, agents and multi-agent: one ladder, and you only climb when the lower rung cannot express the decision.",
+      "code": {
+        "lang": "python",
+        "src": "from langchain.agents import create_agent\n\ntools = [search, calc]\n# rung 1 — chain: YOU decide the order\nctx = search.invoke({\"q\": \"FTSE close\"})\nans = llm.invoke(f\"Context: {ctx}\\nQ: up or down?\")\n# rung 2 — agent: the MODEL decides which tool, how many times\nagent = create_agent(llm, tools)\n# rung 3 — multi-agent: a SUPERVISOR decides which agent\nresearcher = create_agent(llm, [search], name=\"researcher\")\nanalyst    = create_agent(llm, [calc],   name=\"analyst\")"
+      }
+    },
+    {
+      "id": "2026-11-26-03",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "checkpointing",
+      "title": "A checkpoint stores *values* and *pending writes* — that is why a crash mid-superstep is recoverable.",
+      "body": "Each checkpoint holds the channel values after a superstep, the metadata (step, source, writes) and any pending writes from nodes that finished while a sibling was still running. On resume, finished nodes are not re-executed; only the unfinished ones run again.",
+      "quiz": {
+        "question": "Nodes `a` and `b` run in parallel in one superstep. `a` finishes, then the process is killed while `b` is halfway. You resume the thread. What re-runs?",
+        "options": [
+          "Both `a` and `b` — the whole superstep restarts",
+          "Only `b` — `a`'s result was saved as a pending write",
+          "Nothing — the run is marked failed and must be started fresh",
+          "The entire graph from START"
+        ],
+        "answer": 1,
+        "explain": "Pending writes are saved per node as soon as a node completes, before the superstep's checkpoint is cut. Resume replays the superstep but skips nodes whose writes already exist, so a side effect in `a` (an email, a payment) does not happen twice. This is the mechanism behind 'durable execution'."
+      }
+    },
+    {
+      "id": "2026-11-26-04",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "memory-store",
+      "title": "Nodes do not import the Store — they ask for it in the signature.",
+      "body": "Declare a keyword-only parameter typed `BaseStore` (or use `get_store()` from `langgraph.config`) and LangGraph injects the store you passed to `compile(store=...)`. The node body then does `store.get(namespace, key)` / `store.put(...)`. Same trick works for `config: RunnableConfig` and `runtime: Runtime`.",
+      "why": "Injection keeps nodes pure functions you can unit-test with an `InMemoryStore`, and swap for Postgres in production without touching node code."
+    },
+    {
+      "id": "2026-11-26-05",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "reducers",
+      "title": "`add_messages` is an *upsert*, not an append: same id replaces, new id appends.",
+      "body": "The messages reducer matches incoming messages by `id`. A message with an id already in the list replaces the old one in place; an unseen id is appended. That is how a node can 'edit' an earlier message — return a copy with the same id.",
+      "quiz": {
+        "question": "Your state uses `add_messages`. A node returns `[AIMessage(content='fixed', id=last.id)]` where `last` is the previous AI message. What is the list length afterwards?",
+        "options": [
+          "One longer — reducers always append",
+          "Unchanged — the old message is replaced in place",
+          "One shorter — same id removes the old message",
+          "Error — duplicate ids are not allowed"
+        ],
+        "answer": 1,
+        "explain": "Matching ids mean 'update this message'. Removal is a different signal: return `RemoveMessage(id=...)`. Append happens only for ids the list has not seen, which is why messages without ids get a uuid assigned on the way in."
+      }
+    },
+    {
+      "id": "2026-11-26-06",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "streaming-modes",
+      "title": "In `messages` mode the metadata says *which node* produced the token — filter on it.",
+      "body": "`stream_mode=\"messages\"` yields `(chunk, metadata)` for every LLM call in the graph, including the ones you do not want to show (a router, a summariser). `metadata[\"langgraph_node\"]` names the node; `metadata[\"tags\"]` carries any tags you set on the model. Filter before you print.",
+      "why": "Without the filter, users see the router's hidden 'route: billing' tokens interleaved with the real answer.",
+      "code": {
+        "lang": "python",
+        "src": "for chunk, meta in graph.stream(inp, cfg, stream_mode=\"messages\"):\n    if meta[\"langgraph_node\"] != \"answer\":\n        continue                      # skip router / summariser tokens\n    if chunk.content:\n        print(chunk.content, end=\"\", flush=True)"
+      }
+    },
+    {
+      "id": "2026-11-26-07",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "mlflow-tracing",
+      "title": "Tag the trace with `session_id` at request time, or you cannot replay the conversation later.",
+      "body": "A trace is one request. A chat is many. `mlflow.update_current_trace(metadata={\"mlflow.trace.session\": sid, \"mlflow.trace.user\": uid})` inside the traced function stamps the session and user onto the trace so the UI (and `mlflow.search_traces`) can group turns. Set it once, at the top, not in every span.",
+      "why": "Debugging 'the bot got confused on turn 7' is impossible if turn 7 is just an anonymous trace among millions."
+    },
+    {
+      "id": "2026-11-26-08",
+      "bucket": "reinforce",
+      "type": "diagram",
+      "topic": "hybrid-search",
+      "title": "Fuse first, rerank second — the cross-encoder only ever sees the top 20.",
+      "body": "BM25 and the vector index each return a ranked list. RRF merges them cheaply by rank. Only then does a cross-encoder reranker score (query, chunk) pairs — expensive, but on 20 candidates, not 20,000. The LLM gets the top 5.",
+      "why": "Putting the reranker before fusion is the classic mistake: it either scores too many chunks or misses the keyword hits BM25 found.",
+      "diagram": {
+        "direction": "row",
+        "nodes": [
+          {
+            "id": "q",
+            "label": "query"
+          },
+          {
+            "id": "bm",
+            "label": "BM25\\ntop 50"
+          },
+          {
+            "id": "vec",
+            "label": "vector\\ntop 50"
+          },
+          {
+            "id": "rrf",
+            "label": "RRF fuse\\n→ 20"
+          },
+          {
+            "id": "rr",
+            "label": "cross-encoder\\nrerank → 5"
+          },
+          {
+            "id": "llm",
+            "label": "LLM",
+            "kind": "terminal"
+          }
+        ],
+        "edges": [
+          [
+            "q",
+            "bm"
+          ],
+          [
+            "q",
+            "vec"
+          ],
+          [
+            "bm",
+            "rrf"
+          ],
+          [
+            "vec",
+            "rrf"
+          ],
+          [
+            "rrf",
+            "rr"
+          ],
+          [
+            "rr",
+            "llm"
+          ]
+        ],
+        "caption": "Cheap wide net → cheap merge → expensive narrow score."
+      }
+    },
+    {
+      "id": "2026-11-26-09",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "structured-output",
+      "title": "What type comes out of `with_structured_output(Pydantic)`? Not a dict, not a message.",
+      "body": "Bind a Pydantic class and the runnable returns an *instance* of that class — validated, typed, attribute access. Bind a TypedDict or JSON schema and you get a dict. With `include_raw=True` you get a dict of `raw`, `parsed`, `parsing_error` instead.",
+      "quiz": {
+        "question": "`llm.with_structured_output(Invoice).invoke(text)` where `Invoice` is a Pydantic model. What does `.invoke` return?",
+        "options": [
+          "An `AIMessage` whose content is JSON",
+          "A `dict` with the invoice fields",
+          "An `Invoice` instance",
+          "A JSON string you must `json.loads`"
+        ],
+        "answer": 2,
+        "explain": "Pydantic in, Pydantic out: the tool-call arguments are parsed and validated into the class, so `result.total` just works. The same call with `Invoice` as a TypedDict returns a plain dict, and `include_raw=True` wraps everything so a validation failure becomes a value instead of an exception."
+      }
+    },
+    {
+      "id": "2026-11-26-10",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "token-cost-tracking",
+      "title": "`input_token_details` splits cached from uncached tokens — bill them at different prices.",
+      "body": "`AIMessage.usage_metadata` has `input_tokens`, `output_tokens`, `total_tokens` — and `input_token_details` with `cache_read` and `cache_creation`. Cache reads cost ~10% of a fresh token on Anthropic and OpenAI. A cost tracker that multiplies `input_tokens` by one price over-reports a prompt-cached agent by 5–10×.",
+      "why": "The first thing a finance reviewer asks is 'why does the dashboard say $400 when the invoice says $70?' — the answer is usually cache reads."
+    },
+    {
+      "id": "2026-11-26-11",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "rag-eval",
+      "title": "Evaluate the judge before you trust the judge.",
+      "body": "An LLM-as-judge metric (faithfulness, relevancy, GEval) is itself a model that can be wrong. Hand-label 50–100 examples, run the judge, and measure agreement (Cohen's κ or plain accuracy). Below ~0.7 agreement, tune the judge prompt or switch models before using it to gate anything.",
+      "why": "Interviewers love this: 'how do you know your eval is right?' The answer is a small human-labelled set and an agreement number, not 'we use GPT-4'."
+    },
+    {
+      "id": "2026-11-26-12",
+      "bucket": "reinforce",
+      "type": "diagram",
+      "topic": "langgraph-platform-deploy",
+      "title": "Assistant → thread → run: the three nouns every Agent Server call uses.",
+      "body": "An *assistant* is a graph plus config (the thing you deploy). A *thread* is the persisted state for one conversation. A *run* is one invocation of an assistant on a thread. `client.runs.stream(thread_id, assistant_id, input=...)` names all three; stateless runs pass `thread_id=None`.",
+      "why": "Every SDK method, cron and webhook is parameterised by these three ids — once they are clear, the API reads itself.",
+      "diagram": {
+        "direction": "row",
+        "nodes": [
+          {
+            "id": "g",
+            "label": "graph + config\\n= assistant"
+          },
+          {
+            "id": "t",
+            "label": "thread\\ncheckpoints"
+          },
+          {
+            "id": "r",
+            "label": "run\\none invoke/stream"
+          },
+          {
+            "id": "o",
+            "label": "stream events\\n/ final state",
+            "kind": "terminal"
+          }
+        ],
+        "edges": [
+          [
+            "g",
+            "r"
+          ],
+          [
+            "t",
+            "r"
+          ],
+          [
+            "r",
+            "o"
+          ]
+        ],
+        "caption": "assistant = what, thread = where, run = when."
+      }
+    },
+    {
+      "id": "2026-11-26-13",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "durable-runs-resume",
+      "title": "A re-queued run replays the last superstep — so every tool side effect needs an idempotency key.",
+      "body": "When a replica shuts down and another picks the run up, execution restarts from the last checkpoint. Pending writes save finished nodes, but a node that was *mid-call* when the pod died runs again. If that node charges a card or sends an email, pass a deterministic key (`thread_id + step`) so the downstream API dedupes.",
+      "why": "Durable execution makes the graph safe to resume; it does not make your tools safe to repeat. That is your job."
+    },
+    {
+      "id": "2026-11-26-14",
+      "bucket": "next",
+      "type": "quiz",
+      "topic": "evaluate-upload-runs",
+      "title": "Uploading target traces during `evaluate()` is a choice, not a default you forget about.",
+      "body": "Every call of your target function during an evaluation produces a trace. Uploading them is what lets you click from a bad score into the exact run — but it also doubles trace volume and ships the eval inputs (possibly PII, possibly customer data) to LangSmith.",
+      "quiz": {
+        "question": "You run `evaluate()` over a 5,000-example dataset containing real customer tickets, in a tight prompt-tuning loop, 20 times an hour. Which setting fits best?",
+        "options": [
+          "Upload runs — you always want full traces",
+          "Skip uploading target runs; keep the scores, debug the worst 20 locally with uploads on",
+          "Disable tracing entirely so nothing is recorded",
+          "Upload only the evaluator runs, since the target is deterministic"
+        ],
+        "answer": 1,
+        "explain": "Scores and the experiment still land in LangSmith; you just avoid 100k traces an hour of customer text. When a score dips, re-run the handful of failing rows with uploads on. Disabling tracing entirely throws away the experiment too, and evaluator runs are rarely the ones you need to inspect."
+      }
+    },
+    {
+      "id": "2026-11-26-15",
+      "bucket": "next",
+      "type": "code",
+      "topic": "tracing-context-inherit",
+      "title": "`tracing_context(enabled=False)` is the off-switch for one block — not an env var, not a restart.",
+      "body": "Nested tracing contexts control more than tags. `enabled=False` silences tracing for everything inside the block (health checks, retries you do not want counted, a judge call inside an evaluator). It composes with the inherit flag: an inner block can drop parent tags *and* keep tracing on.",
+      "why": "Prod incident: a warm-up loop was creating 40k empty traces a day. One `with` block fixed it.",
+      "code": {
+        "lang": "python",
+        "src": "from langsmith import tracing_context, traceable\n\n@traceable\ndef answer(q): return llm.invoke(q)\n\nwith tracing_context(enabled=False):\n    answer(\"ping\")                     # not traced: health check\n\nwith tracing_context(tags=[\"prod\"], metadata={\"tenant\": \"acme\"}):\n    answer(\"real question\")           # traced with tags"
+      }
+    },
+    {
+      "id": "2026-11-26-16",
+      "bucket": "next",
+      "type": "diagram",
+      "topic": "thread-transcript-endpoint",
+      "title": "Transcript = turns. Checkpoints = steps. The endpoint hides the second behind the first.",
+      "body": "A thread stores a checkpoint per superstep — far too fine for a chat UI. `GET /threads/{id}/transcript` collapses them into turns and gives each a `position`. The client stores the newest position and passes it to the stream endpoint to replay only what it missed.",
+      "why": "Pagination by turn, replay by position: this is how a mobile app resumes a 200-step agent conversation without downloading 200 checkpoints.",
+      "diagram": {
+        "direction": "row",
+        "nodes": [
+          {
+            "id": "cp",
+            "label": "checkpoints\\n1 per superstep"
+          },
+          {
+            "id": "tr",
+            "label": "transcript\\nturns, newest first"
+          },
+          {
+            "id": "pos",
+            "label": "position\\nstored by client"
+          },
+          {
+            "id": "st",
+            "label": "stream\\nreplay > position",
+            "kind": "terminal"
+          }
+        ],
+        "edges": [
+          [
+            "cp",
+            "tr"
+          ],
+          [
+            "tr",
+            "pos"
+          ],
+          [
+            "pos",
+            "st"
+          ]
+        ],
+        "caption": "410 Gone when the position is on an abandoned fork — start from the top."
+      }
+    },
+    {
+      "id": "2026-11-26-17",
+      "bucket": "next",
+      "type": "code",
+      "topic": "openai-stream-toolcall-args",
+      "title": "Streamed tool-call arguments arrive in fragments — summing chunks reassembles them.",
+      "body": "While streaming, each `AIMessageChunk` carries `tool_call_chunks`: an `index`, maybe a `name`, and a piece of the JSON `args` string. `chunk_a + chunk_b` concatenates fragments by index. The accumulated chunk exposes fully parsed `.tool_calls` once the JSON is complete — that is what the 1.8.5 fix restored for the Responses API.",
+      "why": "If you only read `.content` from the stream you will swear the model never called a tool. It did — the call lives in the chunks.",
+      "code": {
+        "lang": "python",
+        "src": "full = None\nfor chunk in llm_with_tools.stream(\"weather in Leeds?\"):\n    full = chunk if full is None else full + chunk   # merges tool_call_chunks by index\n    for tc in chunk.tool_call_chunks:\n        print(tc[\"index\"], repr(tc[\"args\"]))          # '{\"ci', 'ty\": \"L', 'eeds\"}'\nfull.tool_calls          # [{'name': 'weather', 'args': {'city': 'Leeds'}, ...}]"
+      }
+    },
+    {
+      "id": "2026-11-26-18",
+      "bucket": "next",
+      "type": "quiz",
+      "topic": "tasks-to-goals",
+      "title": "A goal without a success check is just a longer-running task.",
+      "body": "Giving an agent 'keep the docs in sync with the code' instead of 'update README section 3' only works if the agent can tell when it is done and when to stop spending. Goal engineering is mostly writing the *verifier* (tests, a judge, a metric) and the *budget* (tokens, time, tool calls) — the prompt is the easy part.",
+      "quiz": {
+        "question": "You switch a coding agent from task prompts to a standing goal: 'make CI green'. What is the one thing you must add before it is safe to run unattended?",
+        "options": [
+          "A bigger context window",
+          "A measurable done-condition plus a budget / stop rule",
+          "More tools, so it can always find a fix",
+          "A supervisor agent to review its plan"
+        ],
+        "answer": 1,
+        "explain": "Without a verifier the agent cannot know it has succeeded; without a budget it will keep trying forever (or delete the failing tests). Those two are what turn an open-ended goal into something an orchestrator can schedule, retry and bill. Supervisors and more tools help later, but they do not define 'done'."
+      }
+    },
+    {
+      "id": "2026-11-26-19",
+      "bucket": "next",
+      "type": "code",
+      "topic": "hitl-middleware",
+      "title": "`HumanInTheLoopMiddleware(interrupt_on={...})` — approval gates without writing a single node.",
+      "body": "In `create_agent`, middleware runs around the model and tool steps. The HITL middleware pauses before any tool named in `interrupt_on`, emits an `__interrupt__` with the proposed call, and resumes on `Command(resume=...)` with approve / edit / reject. Needs a checkpointer, like any interrupt.",
+      "why": "Same `interrupt()` machinery you know, packaged so 'ask before sending email' is one line instead of a custom graph.",
+      "code": {
+        "lang": "python",
+        "src": "from langchain.agents import create_agent\nfrom langchain.agents.middleware import HumanInTheLoopMiddleware\nfrom langgraph.checkpoint.memory import InMemorySaver\n\nagent = create_agent(\n    model, tools=[search, send_email],\n    middleware=[HumanInTheLoopMiddleware(interrupt_on={\"send_email\": True})],\n    checkpointer=InMemorySaver(),\n)\nres = agent.invoke({\"messages\": [(\"user\", \"email Sam the summary\")]}, cfg)\nres[\"__interrupt__\"]      # proposed send_email call, waiting for a decision"
+      }
+    },
+    {
+      "id": "2026-11-26-20",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "double-texting",
+      "title": "Double-texting: the user sends again while the run is still going. You pick one of four answers.",
+      "body": "Agent Server's `multitask_strategy`: **enqueue** (default — run the new input after the current run), **reject** (409, the client retries later), **interrupt** (stop now, keep the state so far, start the new input from there), **rollback** (discard the in-flight run entirely, treat the new message as fresh). Chat UIs usually want `interrupt`; batch jobs want `enqueue`.",
+      "why": "Every production chat agent hits this on day one. Choosing by accident means either duplicate answers or a confused thread."
+    },
+    {
+      "id": "2026-11-26-21",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "platform-crons",
+      "title": "Two kinds of cron: `create_for_thread` remembers, `create` forgets.",
+      "body": "`client.crons.create_for_thread(thread_id, assistant_id, schedule=\"0 9 * * 1-5\", input=...)` runs on the *same* thread each time — the agent sees what it did yesterday. `client.crons.create(assistant_id, ...)` makes a fresh thread per firing (deleted after, by default). Schedules are UTC. Crons bill until you delete them.",
+      "why": "This feed is the second kind: stateless, nightly, memory externalised to profile.json. A 'daily check-in' companion wants the first kind."
+    },
+    {
+      "id": "2026-11-26-22",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "stream-reconnect",
+      "title": "Lost the stream? Reconnect with `Last-Event-ID` and the server replays what you missed.",
+      "body": "Thread streaming (`joinStream` / `runs.join_stream`) is server-sent events. Each event carries an id. On a dropped connection the client reconnects with the last id it saw and the server resends everything after it — tokens, node updates, interrupts — instead of starting over or losing the tail.",
+      "why": "Mobile networks drop constantly. Without replay, your users see half an answer and a spinner forever."
+    },
+    {
+      "id": "2026-11-26-23",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "engine-issues",
+      "title": "Engine v2 closes the loop: traces → clustered issues → root cause in *your repo* → a PR tested against an eval set.",
+      "body": "LangSmith's Engine scans production traces on a schedule, groups recurring failures into *issues*, diagnoses them against a connected repository and proposes a fix as a PR. v2 runs the candidate fix through an evaluation set before opening the PR, so the suggestion comes with numbers, not vibes.",
+      "why": "This is the 'knowledge factory' idea applied to code: the agent's own failures become the backlog, and the fix is validated the way you would validate it.",
+      "source": "https://www.langchain.com/blog/the-agent-lake"
+    },
+    {
+      "id": "2026-11-26-24",
+      "bucket": "next",
+      "type": "diagram",
+      "topic": "model-fallback-middleware",
+      "title": "`ModelFallbackMiddleware` is a try/except around the model call, in order, until one answers.",
+      "body": "Pass a primary and any number of fallbacks. On an error (rate limit, 5xx, overload) the middleware retries the same request with the next model in the list, so the agent loop never sees the failure. Pair it with `ModelRetryMiddleware` for transient errors on the *same* model first.",
+      "why": "Provider outages are the most common agent outage. Fallback across providers is a one-line insurance policy.",
+      "diagram": {
+        "direction": "row",
+        "nodes": [
+          {
+            "id": "req",
+            "label": "model request"
+          },
+          {
+            "id": "m1",
+            "label": "primary\\nclaude"
+          },
+          {
+            "id": "m2",
+            "label": "fallback 1\\ngpt"
+          },
+          {
+            "id": "m3",
+            "label": "fallback 2\\ngemini"
+          },
+          {
+            "id": "ok",
+            "label": "response",
+            "kind": "terminal"
+          }
+        ],
+        "edges": [
+          [
+            "req",
+            "m1"
+          ],
+          [
+            "m1",
+            "m2"
+          ],
+          [
+            "m2",
+            "m3"
+          ],
+          [
+            "m1",
+            "ok"
+          ],
+          [
+            "m2",
+            "ok"
+          ],
+          [
+            "m3",
+            "ok"
+          ]
+        ],
+        "caption": "Each → to the right is 'on error'. Each → to response is 'on success'."
+      }
+    },
+    {
+      "id": "2026-11-26-25",
+      "bucket": "fresh",
+      "type": "diagram",
+      "topic": "agent-lake",
+      "title": "The 'Agent Lake': traces are the raw material, outcomes are the labels, cheap decision models do the sorting.",
+      "body": "LangChain's Nov 24 post names the architecture under LangSmith: *SmithDB*, a trace-specific store, plus a compute layer. Outcomes (thumbs-down, merged PR, judge score) sit next to traces, many-to-many. Small 'decision models' classify and filter traces so the expensive LLM judge only runs on the ones that matter; Insights clusters them; Engine turns clusters into fixes.",
+      "why": "The pattern generalises: store everything, label with outcomes, use a cheap classifier before an expensive judge. You can build a mini version on Postgres + MLflow.",
+      "diagram": {
+        "direction": "row",
+        "nodes": [
+          {
+            "id": "tr",
+            "label": "traces + outcomes\\nSmithDB"
+          },
+          {
+            "id": "dm",
+            "label": "decision models\\nclassify / filter"
+          },
+          {
+            "id": "ev",
+            "label": "online evaluators\\nLLM judge on the few"
+          },
+          {
+            "id": "ins",
+            "label": "Insights\\nclusters"
+          },
+          {
+            "id": "eng",
+            "label": "Engine\\nissue → PR",
+            "kind": "terminal"
+          }
+        ],
+        "edges": [
+          [
+            "tr",
+            "dm"
+          ],
+          [
+            "dm",
+            "ev"
+          ],
+          [
+            "ev",
+            "ins"
+          ],
+          [
+            "ins",
+            "eng"
+          ]
+        ],
+        "caption": "Cheap first, expensive last — same shape as hybrid search's rerank stage."
+      },
+      "source": "https://www.langchain.com/blog/the-agent-lake"
+    },
+    {
+      "id": "2026-11-26-26",
+      "bucket": "fresh",
+      "type": "code",
+      "topic": "stream-chunk-id",
+      "title": "langchain-core 1.8.5: every chunk of a streamed message now carries the *same* provider id.",
+      "body": "Before the fix, only the first `AIMessageChunk` had the provider's message id; later chunks could get a fresh one, so `add_messages` sometimes saw two ids for one reply and kept both. 1.8.5 (Nov 25) reuses the provider id on every chunk, so summing chunks — and the messages reducer — see one message.",
+      "why": "Explains a class of 'duplicate assistant message' bugs in streamed LangGraph chats. Upgrade core before you patch your reducer.",
+      "code": {
+        "lang": "python",
+        "src": "full = None\nids = set()\nfor chunk in llm.stream(\"say hi\"):\n    ids.add(chunk.id)\n    full = chunk if full is None else full + chunk\nassert len(ids) == 1            # 1.8.5: one id across the whole stream\nassert full.id == next(iter(ids))"
+      },
+      "source": "https://github.com/langchain-ai/langchain/releases/tag/langchain-core%3D%3D1.8.5"
+    },
+    {
+      "id": "2026-11-26-27",
+      "bucket": "fresh",
+      "type": "concept",
+      "topic": "per-model-http-client",
+      "title": "langchain-anthropic 1.7.12: each `ChatAnthropic` gets its own async HTTP client. Here is why that was a bug.",
+      "body": "Models used to share one async `httpx` client. Create a model in one event loop (a sync warm-up, a test) and use another model in a different loop (your FastAPI app) and the shared client could be bound to a closed loop — 'Event loop is closed' errors that only show in prod. Nov 19's release gives every instance its own client; the same release also standardises `finish_reason` and keeps the caller on `tool_search_tool_result` blocks.",
+      "why": "If you ever saw a flaky 'RuntimeError: Event loop is closed' from an Anthropic agent under uvicorn, this is the fix — not your code.",
+      "source": "https://releasebot.io/updates/langchain-ai/langchain"
+    },
+    {
+      "id": "2026-11-26-28",
+      "bucket": "fresh",
+      "type": "code",
+      "topic": "conversational-geval",
+      "title": "DeepEval 4.3.5: `ConversationalGEval` now takes `context` and `chatbot_role` at the *conversation* level.",
+      "body": "Multi-turn judges used to need the role and grounding context repeated per turn. The Nov 24 release accepts them once on the `ConversationalTestCase`, so a 'did the bot stay in role and stay grounded across 12 turns' criterion is a few lines. Same release adds `GatewayModel` (LiteLLM price map, so eval cost is priced per provider).",
+      "why": "Multi-turn evals are the interview question of 2026: 'how do you test a support bot over a whole conversation, not one reply?'",
+      "code": {
+        "lang": "python",
+        "src": "from deepeval.test_case import ConversationalTestCase, Turn\nfrom deepeval.metrics import ConversationalGEval\n\ncase = ConversationalTestCase(\n    chatbot_role=\"A polite billing assistant for Acme\",\n    context=[\"Refunds take 5 business days.\"],\n    turns=[Turn(role=\"user\", content=\"where's my refund?\"),\n           Turn(role=\"assistant\", content=\"Refunds take 5 business days.\")],\n)\nmetric = ConversationalGEval(name=\"in-role & grounded\",\n    criteria=\"Assistant stays in role and only states facts from context.\")\nmetric.measure(case); print(metric.score, metric.reason)"
+      },
+      "source": "https://deepeval.com/changelog/changelog-2026"
+    },
+    {
+      "id": "2026-11-26-29",
+      "bucket": "fresh",
+      "type": "quiz",
+      "topic": "cursor-pagination",
+      "title": "langsmith 0.16.0 (Nov 21) broke one API on purpose: secrets listing moved to *cursor* pagination.",
+      "body": "Offset pagination (`?offset=200&limit=100`) skips or repeats rows when items are inserted between pages. Cursor pagination returns an opaque token pointing at the last row; the next call starts strictly after it. The SDK's workspace-secrets listing switched to cursors — the breaking change in 0.16.0 — and the run-rules API now returns a `backfill_id` you can poll.",
+      "quiz": {
+        "question": "A nightly job lists 10,000 runs with offset pagination while new runs keep arriving. Which symptom does cursor pagination fix?",
+        "options": [
+          "Pages come back slower as offset grows",
+          "Some runs appear twice and others never appear",
+          "The total count is wrong",
+          "Both A and B"
+        ],
+        "answer": 3,
+        "explain": "Large offsets make the database scan and discard rows (slow), and any insert shifts every later row by one, so a run at the page boundary is seen twice or skipped. A cursor is a stable 'after this row' marker, so neither happens. That is why SDKs break compatibility to move to it."
+      },
+      "source": "https://github.com/langchain-ai/langsmith-python/pull/114"
+    },
+    {
+      "id": "2026-11-26-30",
+      "bucket": "fresh",
+      "type": "concept",
+      "topic": "deepeval-gateway-model",
+      "title": "DeepEval 4.3.5 `GatewayModel`: route judge calls through LiteLLM and get the eval *bill* for free.",
+      "body": "A judge model string like `\"anthropic/claude-sonnet-5-5\"` or `\"openai/gpt-5.6\"` goes through LiteLLM's provider map, and the cost is looked up from LiteLLM's price table per call. Point it at a gateway URL and every metric in the suite uses the same routing, retries and spend tracking — no per-metric model wiring.",
+      "why": "Eval cost is the silent line item: a 2,000-case suite with a frontier judge can cost more than the agent it grades. Price it before you put it in CI.",
+      "source": "https://deepeval.com/changelog/changelog-2026"
+    }
+  ]
+}
