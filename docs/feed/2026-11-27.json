@@ -1,0 +1,582 @@
+{
+  "date": "2026-11-27",
+  "generated_by": "nightly-task",
+  "cards": [
+    {
+      "id": "2026-11-27-01",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "langchain-vs-langgraph",
+      "title": "Three questions pick the tool: Does it loop? Does it pause? Must it survive a crash?",
+      "body": "Ask them in order. A fixed prompt → model → parser path with no loop, no human pause and nothing to resume is a LangChain chain. Answer *yes* to any one of the three and you need state that outlives a single function call — that is LangGraph. The model, tools and prompts are identical either way; only the control flow changes.",
+      "why": "This is the concrete version of 'chains vs graphs' for an interview: name the three questions, then say which one your project answered yes to."
+    },
+    {
+      "id": "2026-11-27-02",
+      "bucket": "reinforce",
+      "type": "diagram",
+      "topic": "agent-ladder",
+      "title": "The ladder is one box with more arrows inside — not three frameworks.",
+      "body": "Rung 1: a chain, the path is fixed at write time. Rung 2: an agent, the model picks the next tool at run time, inside a loop. Rung 3: multi-agent, an agent picks the next *agent*. Each rung reuses everything below it: the same tools, the same state object, the same checkpointer.",
+      "why": "The thing people struggle to connect is that a 'multi-agent system' is just a graph whose nodes happen to be agents. Nothing new is introduced except who decides the next hop.",
+      "diagram": {
+        "direction": "col",
+        "nodes": [
+          {
+            "id": "c",
+            "label": "Chain\npath fixed at write time"
+          },
+          {
+            "id": "a",
+            "label": "Agent\nmodel picks next tool (loop)"
+          },
+          {
+            "id": "m",
+            "label": "Multi-agent\nagent picks next agent"
+          },
+          {
+            "id": "s",
+            "label": "shared: state + checkpointer + tools",
+            "kind": "terminal"
+          }
+        ],
+        "edges": [
+          [
+            "c",
+            "a"
+          ],
+          [
+            "a",
+            "m"
+          ],
+          [
+            "m",
+            "s"
+          ]
+        ],
+        "caption": "Climb a rung = hand one more decision to the model."
+      }
+    },
+    {
+      "id": "2026-11-27-03",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "rag-chunking",
+      "title": "`RecursiveCharacterTextSplitter` tries separators in order — put the structural ones first.",
+      "body": "The splitter walks the separator list and only falls to the next one when a piece is still too big. Default order is paragraph → line → word → character. Prepend your document's real structure (Markdown headings, section markers) and chunks stop cutting a heading from its paragraph.",
+      "why": "Most 'retrieval returned the wrong half of the section' bugs are a separator-order bug, not an embedding bug.",
+      "code": {
+        "lang": "python",
+        "src": "from langchain_text_splitters import RecursiveCharacterTextSplitter\n\nsplitter = RecursiveCharacterTextSplitter(\n    chunk_size=800,\n    chunk_overlap=100,\n    separators=[\"\\n## \", \"\\n### \", \"\\n\\n\", \"\\n\", \" \", \"\"],\n)\nchunks = splitter.split_documents(docs)\nprint(len(chunks), chunks[0].page_content[:80])"
+      }
+    },
+    {
+      "id": "2026-11-27-04",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "tools-docstring",
+      "title": "Constrain an argument in the *description* — the model reads that, not your `if`.",
+      "body": "A range check inside the tool only fires after the model has already guessed wrong. The schema the model sees is built from type hints, defaults and descriptions, so the cheapest place to steer an argument is the `Annotated` description or the docstring's Args section. Clamp inside the tool as a second line of defence.",
+      "quiz": {
+        "question": "`@tool def search(query: str, k: int = 5): \"\"\"Search the docs.\"\"\"` — the agent keeps calling it with k=50 and blowing the context window. Cheapest effective fix?",
+        "options": [
+          "Raise ValueError inside the tool when k > 10",
+          "Describe `k` in the schema ('results to return, 1–10') and clamp inside the tool",
+          "Rename the tool to `search_small`",
+          "Lower the model temperature to 0"
+        ],
+        "answer": 1,
+        "explain": "The model chooses k from the description it sees, so put the constraint there — e.g. `k: Annotated[int, 'results to return, 1–10'] = 5`. The clamp is a backstop so one bad call never costs a whole context window. Raising alone just burns a loop iteration on an error message; renaming and temperature do not tell the model what range is valid."
+      }
+    },
+    {
+      "id": "2026-11-27-05",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "checkpointing",
+      "title": "`get_state_history()` walks a thread's checkpoints newest-first — your debugger for free.",
+      "body": "Every superstep left a checkpoint. Iterate them to see which node was about to run (`.next`), the step number and the `checkpoint_id` you would pass back to fork from that point. This is the same list the LangGraph Studio time-travel slider is built on.",
+      "why": "When a run goes wrong in prod, this loop plus the thread_id is faster than reading the trace: it tells you the exact state the bad node saw.",
+      "code": {
+        "lang": "python",
+        "src": "config = {\"configurable\": {\"thread_id\": \"t-42\"}}\nfor snap in graph.get_state_history(config):\n    print(snap.metadata.get(\"step\"),\n          snap.next,                                  # node(s) about to run\n          snap.config[\"configurable\"][\"checkpoint_id\"])\n# pick one and fork from it:\nfork = {\"configurable\": {\"thread_id\": \"t-42\", \"checkpoint_id\": \"<id>\"}}\ngraph.invoke(None, fork)"
+      }
+    },
+    {
+      "id": "2026-11-27-06",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "interrupt",
+      "title": "Everything *above* `interrupt()` in the node re-runs on resume — so keep side effects below it, or in another node.",
+      "body": "Resume does not jump to the line after `interrupt()`; it re-executes the node from the top and `interrupt()` now returns the resume value instead of raising. Any API call, email or DB write placed before it will therefore happen twice: once on the first pass and once on resume. Put side effects after the interrupt, or split the node.",
+      "why": "The single most common HITL production bug: 'the customer got the confirmation email before I approved it, and then again after'."
+    },
+    {
+      "id": "2026-11-27-07",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "memory-store",
+      "title": "Namespaces are hierarchical — `search()` on a prefix returns everything beneath it.",
+      "body": "A namespace is a tuple, and the tuple is a path. Put the user first, then the category, and you can list all of a user's memories with a short prefix or just their preferences with a longer one. Filter on value fields for the rest.",
+      "why": "Design the namespace like a filesystem on day one; migrating memories later is painful because they live in prod databases, not in code.",
+      "code": {
+        "lang": "python",
+        "src": "from langgraph.store.memory import InMemoryStore\n\nstore = InMemoryStore()\nstore.put((\"users\", \"u1\", \"prefs\"), \"tone\", {\"v\": \"terse\"})\nstore.put((\"users\", \"u1\", \"facts\"), \"role\", {\"v\": \"data engineer\"})\n\nall_u1   = store.search((\"users\", \"u1\"))            # 2 items\nprefs    = store.search((\"users\", \"u1\", \"prefs\"))   # 1 item\nprint([i.key for i in all_u1], prefs[0].value)"
+      }
+    },
+    {
+      "id": "2026-11-27-08",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "rag-eval",
+      "title": "Reference-free vs reference-based: some RAG metrics need a ground truth, some only need the trace.",
+      "body": "Faithfulness compares the answer to the retrieved context. Answer relevancy compares the answer to the question. Neither needs a human-written reference, so you can run them on every production trace. Context recall and answer correctness compare against an *expected* answer, so they need a labelled dataset.",
+      "quiz": {
+        "question": "You have 300 real user questions from production traces but no reference answers yet. Which metrics can you compute today?",
+        "options": [
+          "Context recall and answer correctness",
+          "Faithfulness and answer relevancy",
+          "Only context recall",
+          "None — every RAG metric needs a ground truth"
+        ],
+        "answer": 1,
+        "explain": "Faithfulness (answer ⊆ context?) and answer relevancy (answer addresses the question?) are reference-free, which is why they are the usual online evaluators. Context recall asks 'did we retrieve what the *expected* answer needs?' — impossible without the expected answer. Start reference-free in prod, then label a slice of those traces to unlock the reference-based metrics in CI."
+      }
+    },
+    {
+      "id": "2026-11-27-09",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "structured-output",
+      "title": "`method=` decides *how* the schema is enforced: `function_calling`, `json_schema` or `json_mode`.",
+      "body": "`with_structured_output` picks a sensible default per provider, but you can force one. `json_schema` uses provider-native constrained decoding (strict shapes, best reliability where supported). `function_calling` wraps your schema as a tool — works almost everywhere. `json_mode` only guarantees *valid JSON*, not *your* JSON, so you must describe the shape in the prompt.",
+      "why": "Interview follow-up to 'how do you get structured output': know that json_mode is the weak option and why strict json_schema is the one you want for Pydantic models."
+    },
+    {
+      "id": "2026-11-27-10",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "mlflow-tracing",
+      "title": "`mlflow.update_current_trace()` tags a trace from *inside* the code that knows the tenant.",
+      "body": "You often do not know the user, tenant or feature flag until you are already several spans deep. Instead of threading that value back to the caller, update the active trace where the information appears. Tags are what you filter on later in the UI and in `mlflow.search_traces()`.",
+      "why": "Cost-per-tenant and error-rate-per-feature dashboards are impossible if the tag is missing; this is the one line that makes them possible.",
+      "code": {
+        "lang": "python",
+        "src": "import mlflow\n\n@mlflow.trace(span_type=\"AGENT\")\ndef handle(request):\n    user = auth.lookup(request.token)             # only known here\n    mlflow.update_current_trace(\n        tags={\"tenant\": user.tenant, \"plan\": user.plan},\n        metadata={\"request_id\": request.id},\n    )\n    return agent.invoke({\"messages\": request.messages})"
+      }
+    },
+    {
+      "id": "2026-11-27-11",
+      "bucket": "reinforce",
+      "type": "diagram",
+      "topic": "guardrails",
+      "title": "Three checkpoints, not one: input, tool call, output.",
+      "body": "An input guard rejects or rewrites what the user sent. A tool-call guard inspects *what the agent is about to do* (which tool, which arguments) before it executes — the place to block a `DELETE` or a payment over a limit. An output guard scrubs what goes back. Each is a node plus a conditional edge; none is a prompt instruction.",
+      "why": "Most teams build only the input and output guards. The tool-call guard is the one that stops an agent from doing damage *to systems*, not just saying something wrong.",
+      "diagram": {
+        "direction": "row",
+        "nodes": [
+          {
+            "id": "u",
+            "label": "user"
+          },
+          {
+            "id": "ig",
+            "label": "input\nguard"
+          },
+          {
+            "id": "ag",
+            "label": "agent"
+          },
+          {
+            "id": "tg",
+            "label": "tool-call\nguard"
+          },
+          {
+            "id": "og",
+            "label": "output\nguard"
+          },
+          {
+            "id": "r",
+            "label": "reply",
+            "kind": "terminal"
+          }
+        ],
+        "edges": [
+          [
+            "u",
+            "ig"
+          ],
+          [
+            "ig",
+            "ag"
+          ],
+          [
+            "ag",
+            "tg"
+          ],
+          [
+            "tg",
+            "ag"
+          ],
+          [
+            "ag",
+            "og"
+          ],
+          [
+            "og",
+            "r"
+          ]
+        ],
+        "caption": "The tool-call guard sits in the loop; the other two sit at the edges."
+      }
+    },
+    {
+      "id": "2026-11-27-12",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "subgraphs",
+      "title": "Private keys stay private: only the keys both schemas share cross the subgraph boundary.",
+      "body": "When a compiled subgraph is added directly as a node, LangGraph maps state by key name. Keys present in both parent and child flow in and out; keys only the child declares are scratch space that the parent never sees. That is a feature: a sub-agent can keep its own `messages` without polluting the parent's.",
+      "quiz": {
+        "question": "A parent state has `messages` and `summary`. The subgraph's state has `messages` and a private `scratch` list it fills while working. After the subgraph node finishes, what does the parent state contain?",
+        "options": [
+          "`messages`, `summary` and `scratch`",
+          "Updated `messages` only — `scratch` never leaves the subgraph",
+          "Nothing new until the subgraph explicitly returns `Command(update=...)`",
+          "A validation error, because the schemas differ"
+        ],
+        "answer": 1,
+        "explain": "Shared keys (`messages`) are written back; `scratch` exists only in the child schema, so it is discarded when the subgraph returns. If the parent needs it, either add `scratch` to the parent schema or wrap the subgraph in a function node that copies what you want into a parent key."
+      }
+    },
+    {
+      "id": "2026-11-27-13",
+      "bucket": "next",
+      "type": "code",
+      "topic": "hitl-middleware",
+      "title": "`interrupt_on` is per tool: gate the dangerous ones, auto-run the rest.",
+      "body": "You rarely want a human on every call. Pass a dict keyed by tool name: `True` interrupts with the default decisions (approve / edit / reject), `False` lets it run, and a config dict narrows what the reviewer may do. The middleware needs a checkpointer because the pause is a real interrupt.",
+      "why": "A good answer to 'how do you add approvals to an agent' is now one middleware line plus a thread_id, not a custom node per tool.",
+      "code": {
+        "lang": "python",
+        "src": "from langchain.agents import create_agent\nfrom langchain.agents.middleware import HumanInTheLoopMiddleware\nfrom langgraph.checkpoint.memory import InMemorySaver\n\nagent = create_agent(\n    model, tools=[send_email, search_docs],\n    middleware=[HumanInTheLoopMiddleware(interrupt_on={\n        \"send_email\": {\"allowed_decisions\": [\"approve\", \"reject\"]},\n        \"search_docs\": False,                       # never pauses\n    })],\n    checkpointer=InMemorySaver(),\n)"
+      }
+    },
+    {
+      "id": "2026-11-27-14",
+      "bucket": "next",
+      "type": "quiz",
+      "topic": "double-texting",
+      "title": "`interrupt` keeps the half-done work. `rollback` pretends it never happened.",
+      "body": "Four `multitask_strategy` values on a run: `reject` errors the second message, `enqueue` queues it, `interrupt` stops the running run but keeps whatever state it already wrote and starts the new one, `rollback` stops it *and* reverts the thread to the state before it started. Pick based on whether partial work is useful or dangerous.",
+      "quiz": {
+        "question": "A user sends a correction while the agent is mid-run. You want the old run stopped and its partial writes to the thread discarded entirely, then the new message handled. Which strategy?",
+        "options": [
+          "reject",
+          "enqueue",
+          "interrupt",
+          "rollback"
+        ],
+        "answer": 3,
+        "explain": "Only `rollback` reverts the thread state; `interrupt` also cancels the old run but leaves its partial checkpoints in place, which is right when the partial work is still useful context (e.g. a draft). `enqueue` would run both in order; `reject` makes the second message an error for the client to handle."
+      }
+    },
+    {
+      "id": "2026-11-27-15",
+      "bucket": "next",
+      "type": "code",
+      "topic": "platform-crons",
+      "title": "A cron is a scheduled run: same assistant, same input, plus a schedule string.",
+      "body": "`crons.create_for_thread` ties the job to one thread so every firing sees the previous ones (a daily digest that remembers). `crons.create` spawns a fresh thread per firing (a stateless report). Both return a `cron_id` you must delete yourself — crons do not expire.",
+      "why": "Forgotten crons are a real cost leak on Agent Server: list them in a weekly check.",
+      "code": {
+        "lang": "python",
+        "src": "from langgraph_sdk import get_client\nclient = get_client(url=\"http://localhost:2024\")\n\ncron = await client.crons.create_for_thread(\n    thread_id, assistant_id=\"agent\",\n    schedule=\"0 9 * * 1-5\",                       # weekdays 09:00 UTC\n    input={\"messages\": [{\"role\": \"user\", \"content\": \"Daily summary\"}]},\n)\nprint(cron[\"cron_id\"])\n# later:  await client.crons.delete(cron[\"cron_id\"])"
+      }
+    },
+    {
+      "id": "2026-11-27-16",
+      "bucket": "next",
+      "type": "code",
+      "topic": "stream-reconnect",
+      "title": "Reconnecting needs the `run_id`, not just the thread: `runs.join_stream()`.",
+      "body": "Start the run with `runs.create` (fire-and-forget), keep its `run_id`, and attach a stream to it with `join_stream`. If the connection drops, call `join_stream` again — the server replays from where you left off. A plain `runs.stream` cannot be re-attached because the client never learned the run_id.",
+      "why": "Mobile clients lose connections constantly; this pattern is why the agent keeps working while the phone is in a tunnel.",
+      "code": {
+        "lang": "python",
+        "src": "run = await client.runs.create(thread_id, \"agent\",\n                               input={\"messages\": [msg]},\n                               stream_mode=\"messages-tuple\")\ntry:\n    async for ev in client.runs.join_stream(thread_id, run[\"run_id\"]):\n        render(ev)\nexcept ConnectionError:\n    async for ev in client.runs.join_stream(thread_id, run[\"run_id\"]):\n        render(ev)                                  # resumes, no re-run"
+      }
+    },
+    {
+      "id": "2026-11-27-17",
+      "bucket": "next",
+      "type": "diagram",
+      "topic": "engine-issues",
+      "title": "Engine is a loop with your repo inside it.",
+      "body": "Production traces are clustered into *issues*; an issue is traced to a root cause in the code or prompt; a fix PR is opened; the PR is run against an eval set built partly from the failing traces. The output of the last step feeds the first — fixed traces stop appearing, new ones form new issues.",
+      "why": "The interview framing: 'observability closes the loop when a trace can become a regression test without a human copying it'.",
+      "diagram": {
+        "direction": "row",
+        "nodes": [
+          {
+            "id": "t",
+            "label": "prod\ntraces"
+          },
+          {
+            "id": "c",
+            "label": "cluster\nfailures"
+          },
+          {
+            "id": "i",
+            "label": "issue"
+          },
+          {
+            "id": "r",
+            "label": "root cause\nin repo"
+          },
+          {
+            "id": "p",
+            "label": "fix PR"
+          },
+          {
+            "id": "e",
+            "label": "eval gate",
+            "kind": "terminal"
+          }
+        ],
+        "edges": [
+          [
+            "t",
+            "c"
+          ],
+          [
+            "c",
+            "i"
+          ],
+          [
+            "i",
+            "r"
+          ],
+          [
+            "r",
+            "p"
+          ],
+          [
+            "p",
+            "e"
+          ],
+          [
+            "e",
+            "t"
+          ]
+        ],
+        "caption": "Failing traces become dataset examples before the PR merges."
+      }
+    },
+    {
+      "id": "2026-11-27-18",
+      "bucket": "next",
+      "type": "code",
+      "topic": "model-fallback-middleware",
+      "title": "Order fallbacks by *capability similarity*, not by price.",
+      "body": "A fallback fires on provider errors, so the second model must be able to do the same job with the same tools and the same structured-output method. Put the closest substitute first and the cheap 'at least answer something' model last. Different tool-calling behaviour between first and second model is the usual silent failure.",
+      "why": "A fallback that cannot call your tools turns an outage into wrong answers, which is worse than an error.",
+      "code": {
+        "lang": "python",
+        "src": "from langchain.agents import create_agent\nfrom langchain.agents.middleware import ModelFallbackMiddleware\n\nagent = create_agent(\n    \"anthropic:claude-sonnet-4-5\",\n    tools=tools,\n    middleware=[ModelFallbackMiddleware(\n        \"openai:gpt-4.1\",            # same tier, full tool support\n        \"openai:gpt-4.1-mini\",       # last resort\n    )],\n)"
+      }
+    },
+    {
+      "id": "2026-11-27-19",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "agent-lake",
+      "title": "Data lake: schema on read. Agent lake: *label* on read — the outcome arrives after the trace.",
+      "body": "A trace is written at request time, but whether it was a *good* run (PR merged, ticket closed, user did not re-ask) is only known later. The agent-lake idea is to store traces raw and attach outcomes as they arrive, so you can train cheap decision models (routers, judges) on real labelled behaviour instead of synthetic sets.",
+      "why": "This is the practical reason to log outcomes: without the late-arriving label, your trace store is just expensive logs."
+    },
+    {
+      "id": "2026-11-27-20",
+      "bucket": "next",
+      "type": "code",
+      "topic": "stream-chunk-id",
+      "title": "Render streamed tokens keyed by `chunk.id`, not by arrival order.",
+      "body": "With one stable id per message, the UI can keep a dict of buffers: new id → new bubble, same id → append. This survives retried streams (same id re-streams into the same bubble) and parallel nodes streaming at once (different ids, different bubbles).",
+      "why": "Position-based rendering is why some chat UIs show a duplicated or interleaved assistant message under load.",
+      "code": {
+        "lang": "python",
+        "src": "buffers: dict[str, str] = {}\nfor msg, meta in graph.stream(inp, config, stream_mode=\"messages\"):\n    if meta.get(\"langgraph_node\") != \"agent\":\n        continue                                  # skip tool/summary nodes\n    buffers[msg.id] = buffers.get(msg.id, \"\") + (msg.text or \"\")\n    ui.render(msg.id, buffers[msg.id])            # upsert by id"
+      }
+    },
+    {
+      "id": "2026-11-27-21",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "per-model-http-client",
+      "title": "A connection pool belongs to a *client*; share it on purpose, never by accident.",
+      "body": "Each chat model instance owning its own HTTP client means two models cannot starve each other of connections, but it also means twenty `ChatAnthropic(...)` calls make twenty pools. Create model objects once at startup (module level or a factory with caching) and pass them around; create per-request only when the config really differs.",
+      "why": "Both failure modes show up as 'random timeouts under load': one from a shared pool being exhausted, the other from pool churn."
+    },
+    {
+      "id": "2026-11-27-22",
+      "bucket": "next",
+      "type": "quiz",
+      "topic": "conversational-geval",
+      "title": "Per-turn metrics cannot see a contradiction between turn 2 and turn 9.",
+      "body": "Averaging single-turn scores answers 'was each reply fine on its own'. Conversation-level criteria — stayed in role, never contradicted itself, resolved the goal — need the whole transcript as one test case. That is the job of `ConversationalTestCase` plus a conversational metric.",
+      "quiz": {
+        "question": "You want to grade: 'the assistant never contradicts something it said earlier in the chat'. Which shape?",
+        "options": [
+          "An `LLMTestCase` per turn, scores averaged",
+          "One `ConversationalTestCase` with a `ConversationalGEval` criterion",
+          "`GEval` on the final turn only",
+          "`FaithfulnessMetric` with the earlier turns as context"
+        ],
+        "answer": 1,
+        "explain": "A contradiction is a relation *between* turns, so the judge must see all of them together — exactly what ConversationalGEval does over a ConversationalTestCase. Option 3 is a clever hack but grades only the last turn; options 0 and 2 never see two turns at once."
+      }
+    },
+    {
+      "id": "2026-11-27-23",
+      "bucket": "next",
+      "type": "code",
+      "topic": "cursor-pagination",
+      "title": "The cursor loop in six lines — and why `offset` lies under concurrent writes.",
+      "body": "With offset, inserting one new row at the top shifts every page by one, so page 2 repeats the last row of page 1 and silently skips another. A cursor is a bookmark to a *specific row*, so new rows cannot move it. The loop shape is always the same: fetch, process, read the next cursor, stop when it is empty.",
+      "why": "Nightly export jobs are the classic victim: they run exactly when the system is busiest writing.",
+      "code": {
+        "lang": "python",
+        "src": "cursor = None\nwhile True:\n    page = client.list_runs(limit=100, cursor=cursor)   # any cursor API\n    for item in page[\"items\"]:\n        handle(item)\n    cursor = page.get(\"next_cursor\")\n    if not cursor:\n        break"
+      }
+    },
+    {
+      "id": "2026-11-27-24",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "deepeval-gateway-model",
+      "title": "A judge is a model call too — route it through the same gateway as your agent.",
+      "body": "Putting the evaluator model behind the gateway gives you three things for free: the eval bill shows up next to the agent bill, rate limits and keys are managed in one place, and swapping the judge model is a config change rather than a code change. Keep the judge *different* from the model under test.",
+      "why": "Eval cost is often invisible until it is 30% of the LLM bill; a gateway makes it a line item on day one."
+    },
+    {
+      "id": "2026-11-27-25",
+      "bucket": "fresh",
+      "type": "code",
+      "topic": "managed-deep-agents",
+      "title": "Managed Deep Agents: `define_deep_agent()` returns a *definition*, and LangSmith compiles and runs it.",
+      "body": "The open-source `create_deep_agent` gives you a compiled graph you host. The managed flavour (public beta on LangSmith Cloud, updated Nov 2) takes the same shape of arguments in an `agent.py`, and `mda deploy` ships it to Agent Server with Studio, tracing, memory and an MCP endpoint attached. `instructions.md` is the system prompt; `tools/` and `skills/` are folders.",
+      "why": "This is the 'I do not want to run infra' answer for deep agents: same harness, zero servers, and it slots into the Agent Server API your clients already speak.",
+      "code": {
+        "lang": "python",
+        "src": "# agent.py  —  uvx --from managed-deepagents mda init my-agent\nfrom managed_deepagents import define_deep_agent\nfrom tools.search import search_docs\n\nagent = define_deep_agent(\n    name=\"docs-helper\",\n    model=\"anthropic:claude-sonnet-4-5\",\n    tools=[search_docs],\n    interrupt_on={\"send_email\": True},     # human approval\n)\n# uv run mda dev     -> local Agent Server in Studio\n# uv run mda deploy  -> LangSmith Cloud"
+      },
+      "source": "https://www.langchain.com/blog/introducing-managed-deep-agents"
+    },
+    {
+      "id": "2026-11-27-26",
+      "bucket": "fresh",
+      "type": "diagram",
+      "topic": "managed-deep-agents",
+      "title": "A managed deep agent is a *folder*: each file is one concern.",
+      "body": "`agent.py` declares the agent, `instructions.md` is the prompt, `tools/` holds Python tools (and `mcp.py` for remote MCP servers), `skills/` holds reusable procedures, `schedules/` turns it into a proactive agent with `define_schedule(cron=..., timezone=..., prompt=...)`. Instructions and skills sync to Context Hub on every deploy.",
+      "why": "Compare with yesterday's proactive-agents card: schedules and channels are now files in the project, not glue code you write.",
+      "diagram": {
+        "direction": "col",
+        "nodes": [
+          {
+            "id": "a",
+            "label": "agent.py\ndefine_deep_agent()"
+          },
+          {
+            "id": "i",
+            "label": "instructions.md\n+ skills/"
+          },
+          {
+            "id": "t",
+            "label": "tools/\n+ tools/mcp.py"
+          },
+          {
+            "id": "s",
+            "label": "schedules/\ndefine_schedule(cron=...)"
+          },
+          {
+            "id": "d",
+            "label": "mda deploy → Agent Server\n(Studio, traces, /mcp)",
+            "kind": "terminal"
+          }
+        ],
+        "edges": [
+          [
+            "a",
+            "d"
+          ],
+          [
+            "i",
+            "d"
+          ],
+          [
+            "t",
+            "d"
+          ],
+          [
+            "s",
+            "d"
+          ]
+        ],
+        "caption": "One deploy command assembles the folder into a running agent."
+      },
+      "source": "https://www.langchain.com/blog/introducing-managed-deep-agents"
+    },
+    {
+      "id": "2026-11-27-27",
+      "bucket": "fresh",
+      "type": "quiz",
+      "topic": "iso-42001-audit",
+      "title": "ISO 42001 for agents is four questions — and each maps to a LangSmith feature you already use.",
+      "body": "LangChain's Nov 24 write-up on earning ISO/IEC 42001: auditors asked *what is the agent allowed to do* (per-tool approve/ask settings, HITL middleware, workspace permissions), *how do you prove it works* (versioned datasets, experiments tied to an app version, judges), *how do you prove what it did* (traces per deployment, online evaluators, threshold alerts) and *how do you improve it* (Engine turning failures into dataset examples and fix PRs).",
+      "quiz": {
+        "question": "An auditor asks: 'Show me evidence of what this agent actually did last Tuesday for customer X, and that you would have been alerted if it misbehaved.' Which pair of controls answers it?",
+        "options": [
+          "Prompt versioning + dataset tags",
+          "Per-tool approval settings + HITL middleware",
+          "Tracing bound to the deployment + online evaluators with threshold alerts",
+          "Engine issue clustering + fix PRs"
+        ],
+        "answer": 2,
+        "explain": "'What did it do' is the trace; 'would you have known' is the online evaluator plus the alert rule. Option 1 answers 'what is it *allowed* to do', option 0 answers 'how do you prove it works' in CI, option 3 answers 'how do you improve it'. Knowing which question each control answers is the whole governance story in one breath."
+      },
+      "source": "https://www.langchain.com/blog/ai-governance-iso-iec-42001-langsmith"
+    },
+    {
+      "id": "2026-11-27-28",
+      "bucket": "fresh",
+      "type": "concept",
+      "topic": "langsmith-agent-record",
+      "title": "LangSmith's new unit is the *agent record*: owner, immutable ID, type — environments and traces hang off it.",
+      "body": "Traces used to live in a flat list of projects. The rebuilt platform (Nov 16) creates one record per agent with a named owner, a globally unique immutable ID, and a type (general-purpose or coding; voice planned). Local, dev, staging and prod environments are grouped under the same ID, and the type decides the dashboard, data connections and default eval criteria — a coding agent can link a GitHub repo and report cost per merged PR.",
+      "why": "Expect this to show up in how you name and organise tracing projects: one agent ID across environments, not one project per deploy.",
+      "source": "https://www.langchain.com/blog/we-rebuilt-langsmith-around-the-agent"
+    },
+    {
+      "id": "2026-11-27-29",
+      "bucket": "fresh",
+      "type": "concept",
+      "topic": "langgraph-cli-byoc",
+      "title": "langgraph-cli 0.4.44 (Nov 25): deploy to a BYOC data plane with only an API key, and `deploy list --json` now returns the URL.",
+      "body": "Bring-your-own-cloud deployments previously needed more than a key to target from the CLI; now an API key is enough to push a graph into your own data plane. The `--json` listing includes each deployment's URL, which makes 'deploy, then point the smoke test at it' a two-line script instead of a dashboard visit. Same release stops sending an empty secrets list on update.",
+      "why": "CI pipelines want machine-readable output: `langgraph deploy list --json | jq '.[].url'` is the kind of thing this unlocks.",
+      "source": "https://github.com/langchain-ai/langgraph/releases/tag/cli%3D%3D0.4.44"
+    },
+    {
+      "id": "2026-11-27-30",
+      "bucket": "fresh",
+      "type": "concept",
+      "topic": "anthropic-custom-client",
+      "title": "langchain-anthropic 1.7.13 (Nov 25): bring your own HTTP and SDK clients to `ChatAnthropic`.",
+      "body": "Two days after 1.7.12 gave every model its own async HTTP client, 1.7.13 lets you supply the client yourself. That is how you add a corporate proxy, custom TLS, retry/transport tweaks or a pre-configured Anthropic SDK client — and how you deliberately *share* one pool across several model objects when that is what you want.",
+      "why": "Pairs with today's connection-pool card: the default is now isolation per model, and sharing is an explicit decision you make by passing the client in. Check the release notes for the exact parameter names before you upgrade.",
+      "source": "https://github.com/langchain-ai/langchain/releases/tag/langchain-anthropic%3D%3D1.7.13"
+    }
+  ]
+}
