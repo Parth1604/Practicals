@@ -1,6 +1,6 @@
 {
   "learner": "Parth",
-  "updated": "2026-11-27",
+  "updated": "2026-11-28",
   "goal": "AI engineer: LangChain, LangGraph, RAG, agentic systems, MLflow, observability and evals",
   "known": [
     "langchain-vs-langgraph",
@@ -68,18 +68,31 @@
     "per-model-http-client",
     "conversational-geval",
     "cursor-pagination",
-    "deepeval-gateway-model"
+    "deepeval-gateway-model",
+    "managed-deep-agents",
+    "iso-42001-audit",
+    "langsmith-agent-record",
+    "langgraph-cli-byoc",
+    "anthropic-custom-client"
   ],
   "struggled_with": [
     "langchain-vs-langgraph (initially felt too abstract — needs concrete analogies)",
     "connecting chains, agents, multi-agent into one mental model"
   ],
   "next": [
-    "managed-deep-agents",
-    "iso-42001-audit",
-    "langsmith-agent-record",
-    "langgraph-cli-byoc",
-    "anthropic-custom-client"
+    "mlflow-issue-detection",
+    "mlflow-skill-registry",
+    "hitl-per-call",
+    "mcp-tools",
+    "tool-call-delta",
+    "summarization-middleware",
+    "trajectory-evals",
+    "langsmith-sandbox-volumes",
+    "langsmith-code-evaluators-default",
+    "langsmith-user-groups-rename",
+    "langsmith-training-optout",
+    "reasoning-effort-standard",
+    "otel-span-metadata"
   ],
   "stack": [
     "LangChain",

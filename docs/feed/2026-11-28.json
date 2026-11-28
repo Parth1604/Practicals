@@ -1,0 +1,522 @@
+{
+  "date": "2026-11-28",
+  "generated_by": "nightly-task",
+  "cards": [
+    {
+      "id": "2026-11-28-01",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "langchain-vs-langgraph",
+      "title": "A LangGraph node is usually just a LangChain chain with a name.",
+      "body": "Inside a node you write ordinary LangChain: `prompt | llm | parser`, or `create_agent(...)`. LangGraph never replaces that code; it decides *when* it runs, *what state it reads*, and *whether it runs again*. Think of a chain as a function body and the graph as the call graph around it.",
+      "why": "Interviewers ask 'LangChain or LangGraph?' expecting 'both, at different layers'. Chains do work; the graph schedules work."
+    },
+    {
+      "id": "2026-11-28-02",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "agent-ladder",
+      "title": "Spot the rung from the symptom, not the framework name.",
+      "body": "Each rung changes one thing: who decides the next step. Chain: you, at write time. Agent: the model, per step, picking tools. Multi-agent: an agent picking another agent. The same bug report sounds different on each rung.",
+      "quiz": {
+        "question": "A teammate says: 'The billing specialist keeps handing the ticket back to the triage agent, and triage sends it straight back — infinite ping-pong.' Which rung is this system on, and what is the fix family?",
+        "options": [
+          "Chain — add a retry decorator",
+          "Agent — lower the tool count",
+          "Multi-agent — add a handoff budget or a terminal 'escalate' route",
+          "Chain — swap to a bigger model"
+        ],
+        "answer": 2,
+        "explain": "Agents routing to agents is the multi-agent rung, and the classic failure there is a routing loop. Fixes live in control flow: cap handoffs per thread, add a terminal escalation node, or let the supervisor remember who already touched the ticket. Model size and retries do not change who decides next."
+      }
+    },
+    {
+      "id": "2026-11-28-03",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "react-pattern",
+      "title": "The ReAct loop exits on the first `AIMessage` with no `tool_calls`.",
+      "body": "There is no 'done' tool. After every model turn the agent checks `response.tool_calls`: non-empty means run them and loop; empty means the model chose to answer, so return. That is the whole termination rule behind `create_agent`.",
+      "why": "Debug tip: an agent that 'never finishes' is a model that keeps emitting tool calls. Log `len(msg.tool_calls)` per turn and the loop becomes visible."
+    },
+    {
+      "id": "2026-11-28-04",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "lcel",
+      "title": "`.assign()` adds a key to the dict flowing through a chain — nothing is lost.",
+      "body": "`RunnablePassthrough.assign(ctx=retriever)` keeps the original input keys and adds `ctx`. The plain dict-in-a-chain form *replaces* the input with the dict you wrote. Use `assign` when later steps still need the question.",
+      "why": "Most 'KeyError: question' bugs in RAG chains are a dict step that swallowed the input.",
+      "code": {
+        "lang": "python",
+        "src": "from langchain_core.runnables import RunnablePassthrough\nfrom operator import itemgetter\n\nchain = (\n    RunnablePassthrough.assign(ctx=itemgetter(\"q\") | retriever)\n    | prompt                      # sees both \"q\" and \"ctx\"\n    | llm\n)\nchain.invoke({\"q\": \"What is RRF?\"})"
+      }
+    },
+    {
+      "id": "2026-11-28-05",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "supervisor-pattern",
+      "title": "A handoff is a tool that returns `Command(goto=..., graph=Command.PARENT)`.",
+      "body": "Workers hand off by calling a tool whose return value is a `Command`. `graph=Command.PARENT` tells LangGraph the jump targets a node in the *parent* graph, not inside the worker's own subgraph. The supervisor becomes optional: routing lives in the tools.",
+      "why": "This is the 'swarm' shape. Know both shapes and when the decision should sit in a central router versus with the worker.",
+      "code": {
+        "lang": "python",
+        "src": "from langchain_core.tools import tool\nfrom langgraph.types import Command\n\n@tool\ndef transfer_to_billing() -> Command:\n    \"\"\"Hand the conversation to the billing specialist.\"\"\"\n    return Command(goto=\"billing\", graph=Command.PARENT)"
+      }
+    },
+    {
+      "id": "2026-11-28-06",
+      "bucket": "reinforce",
+      "type": "diagram",
+      "topic": "reducers",
+      "title": "A reducer is a tiny merge function that sits on one state key.",
+      "body": "Two parallel nodes write `{\"hits\": [...]}`. Without a reducer the second write is a conflict. With `Annotated[list, operator.add]` the writes queue up and the reducer folds them into the channel, in superstep order. The reducer never sees the whole state — only the old value and one new value.",
+      "diagram": {
+        "direction": "col",
+        "nodes": [
+          {
+            "id": "a",
+            "label": "node a → hits=[1,2]"
+          },
+          {
+            "id": "b",
+            "label": "node b → hits=[3]"
+          },
+          {
+            "id": "r",
+            "label": "reducer: old + new"
+          },
+          {
+            "id": "s",
+            "label": "state.hits = [1,2,3]",
+            "kind": "terminal"
+          }
+        ],
+        "edges": [
+          [
+            "a",
+            "r"
+          ],
+          [
+            "b",
+            "r"
+          ],
+          [
+            "r",
+            "s"
+          ]
+        ],
+        "caption": "One key, one reducer, any number of writers."
+      }
+    },
+    {
+      "id": "2026-11-28-07",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "streaming-modes",
+      "title": "`stream_mode=\"custom\"` streams *your* events — progress, not tokens.",
+      "body": "Call `get_stream_writer()` inside a node and whatever you pass to it arrives in the consumer under the `custom` mode. Use it for 'fetched 3/10 pages' style progress that is neither a token nor a state update.",
+      "why": "Product UIs need progress for long tool calls. This avoids abusing `messages` or polluting state with UI chatter.",
+      "code": {
+        "lang": "python",
+        "src": "from langgraph.config import get_stream_writer\n\ndef crawl(state):\n    writer = get_stream_writer()\n    for i, url in enumerate(state[\"urls\"], 1):\n        writer({\"progress\": f\"{i}/{len(state['urls'])}\", \"url\": url})\n        fetch(url)\n    return {\"done\": True}\n\nfor mode, chunk in graph.stream(inp, stream_mode=[\"custom\", \"updates\"]):\n    print(mode, chunk)"
+      }
+    },
+    {
+      "id": "2026-11-28-08",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "hybrid-search",
+      "title": "BM25 wins on tokens the embedding model never learned.",
+      "body": "Dense retrieval maps meaning; it is weak on strings with no meaning — SKUs, error codes, ticket IDs, function names. Lexical search matches them exactly. Hybrid search exists because every corpus has both kinds of queries.",
+      "quiz": {
+        "question": "Users search an internal runbook for `ERR_CONN_RESET_4091`. Pure vector search returns generic networking docs. Which single change most directly fixes this?",
+        "options": [
+          "Increase top-k from 5 to 20",
+          "Add a BM25 retriever and fuse with RRF",
+          "Switch to a larger embedding model",
+          "Lower chunk_size to 200"
+        ],
+        "answer": 1,
+        "explain": "The query is an exact token with no semantic neighbourhood; only lexical matching finds it reliably. A bigger embedding model still has not seen that string, and more top-k just adds more generic docs. RRF lets the BM25 hit surface without comparing incomparable scores."
+      }
+    },
+    {
+      "id": "2026-11-28-09",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "mlflow-tracing",
+      "title": "Span *type* is what makes the MLflow UI render retrieved docs as docs.",
+      "body": "`@mlflow.trace(span_type=SpanType.RETRIEVER)` plus a list-of-Document output gets a special panel with chunk text, scores and sources. The same function tagged as a generic span shows raw JSON. Types also feed the RAG evaluators that look for retriever spans.",
+      "quiz": {
+        "question": "Your retriever is traced but MLflow's RAG scorers report 'no retrieval context found' and the UI shows raw JSON. Most likely cause?",
+        "options": [
+          "The LLM span is missing",
+          "The retriever span has the default span_type, not RETRIEVER",
+          "Autologging is disabled",
+          "The trace has no session_id tag"
+        ],
+        "answer": 1,
+        "explain": "Scorers and the UI locate context by span type. Set `span_type=SpanType.RETRIEVER` (and return Documents or dicts with page_content) and both start working. Autolog is clearly on — the span exists — and session tags affect grouping, not retrieval rendering."
+      }
+    },
+    {
+      "id": "2026-11-28-10",
+      "bucket": "reinforce",
+      "type": "quiz",
+      "topic": "guardrails",
+      "title": "Scrub PII where the data *crosses a boundary*, not where it is born.",
+      "body": "Three boundaries: user → agent (input), agent → tool (arguments), agent → user (output). A guardrail is cheap at a boundary and expensive inside a prompt. Pick the boundary the data actually crosses.",
+      "quiz": {
+        "question": "Your agent may call a third-party `send_sms(to, text)` tool. Legal says no customer email address may ever reach that vendor. Where does the check belong?",
+        "options": [
+          "In the system prompt: 'never include emails'",
+          "At the tool-call boundary: validate/scrub `text` before `send_sms` executes",
+          "In the output guardrail that checks the final reply",
+          "In the retriever"
+        ],
+        "answer": 1,
+        "explain": "The vendor sees tool *arguments*, so the only boundary that matters is agent → tool. A middleware or tool wrapper that inspects args before execution is deterministic; a prompt rule is advisory and the output guardrail runs too late — the SMS has already gone."
+      }
+    },
+    {
+      "id": "2026-11-28-11",
+      "bucket": "reinforce",
+      "type": "code",
+      "topic": "structured-output",
+      "title": "`create_agent(..., response_format=Model)` gives you `result[\"structured_response\"]`.",
+      "body": "You do not need a separate `with_structured_output` call at the end of an agent. Pass a Pydantic model as `response_format` and the final answer is produced as that type, available next to the messages.",
+      "why": "Interview-grade detail: the tool-calling loop and the final typed answer are two different model behaviours; `response_format` wires the second onto the first.",
+      "code": {
+        "lang": "python",
+        "src": "from pydantic import BaseModel\nfrom langchain.agents import create_agent\n\nclass Triage(BaseModel):\n    team: str\n    priority: int\n\nagent = create_agent(model, tools=[lookup], response_format=Triage)\nout = agent.invoke({\"messages\": [(\"user\", \"Card declined twice\")]})\nprint(out[\"structured_response\"].team, out[\"structured_response\"].priority)"
+      }
+    },
+    {
+      "id": "2026-11-28-12",
+      "bucket": "reinforce",
+      "type": "concept",
+      "topic": "deep-agents-pattern",
+      "title": "The deep agent's to-do list is a *context-engineering* device, not project management.",
+      "body": "`write_todos` makes the agent restate its plan every few steps. The value is not the list; it is that the plan keeps re-entering the context window near the end, where attention is strongest, so a 60-step run does not drift from step 3's intent.",
+      "why": "Same trick as a human rereading their notes mid-task. When you see an agent lose the plot after 20 tool calls, this is the missing piece."
+    },
+    {
+      "id": "2026-11-28-13",
+      "bucket": "next",
+      "type": "quiz",
+      "topic": "managed-deep-agents",
+      "title": "Managed or self-hosted deep agent? Decide by *who owns the loop*.",
+      "body": "A managed deep agent is a definition — prompt, tools, sub-agents, files — that LangSmith compiles, schedules and traces for you. A self-hosted LangGraph graph is code you run. Pick managed when the control flow is the standard deep-agent loop; pick a graph when you need custom edges.",
+      "quiz": {
+        "question": "Your team needs a research agent with three sub-agents and a filesystem, no custom routing, and wants it deployed and traced today with no servers. Which fits?",
+        "options": [
+          "Hand-write a StateGraph and deploy to Agent Server",
+          "Managed Deep Agent via `define_deep_agent()`",
+          "A LangChain chain with a very long prompt",
+          "A cron on the Agent Server"
+        ],
+        "answer": 1,
+        "explain": "The requirement *is* the standard deep-agent loop, so the managed path removes all infra. The moment you need a non-standard edge — say, a compliance check between planner and workers — you drop to a StateGraph. The chain and cron options do not provide sub-agents at all."
+      }
+    },
+    {
+      "id": "2026-11-28-14",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "iso-42001-audit",
+      "title": "For an auditor, a policy is a claim; a trace query is evidence.",
+      "body": "ISO 42001 asks for an AI management system you can *show*. In practice that is four queries: which agent (agent record), what it did (traces with inputs/outputs or their hashed shape), who approved risky actions (HITL interrupts + feedback), and what would have alerted you (online evaluator rules). Write the queries before the audit, not during.",
+      "why": "Compliance work is cheap if your observability already has stable identifiers. It is impossible if traces are anonymous blobs."
+    },
+    {
+      "id": "2026-11-28-15",
+      "bucket": "next",
+      "type": "diagram",
+      "topic": "langsmith-agent-record",
+      "title": "Everything hangs off the agent record: environments, deployments, traces, outcomes.",
+      "body": "The record is the stable identity (owner, immutable ID, type). Environments (dev/staging/prod) belong to it; deployments belong to environments; traces and outcomes point back up the chain. Rename a deployment and nothing breaks, because the ID lives on the record.",
+      "diagram": {
+        "direction": "col",
+        "nodes": [
+          {
+            "id": "r",
+            "label": "agent record\nowner · id · type"
+          },
+          {
+            "id": "e",
+            "label": "environments\ndev · staging · prod"
+          },
+          {
+            "id": "d",
+            "label": "deployments"
+          },
+          {
+            "id": "t",
+            "label": "traces + outcomes",
+            "kind": "terminal"
+          }
+        ],
+        "edges": [
+          [
+            "r",
+            "e"
+          ],
+          [
+            "e",
+            "d"
+          ],
+          [
+            "d",
+            "t"
+          ]
+        ],
+        "caption": "Cost per outcome rolls up to the record."
+      }
+    },
+    {
+      "id": "2026-11-28-16",
+      "bucket": "next",
+      "type": "code",
+      "topic": "langgraph-cli-byoc",
+      "title": "`langgraph deploy list --json | jq '.[].url'` — the URL is now in the JSON.",
+      "body": "langgraph-cli 0.4.44 added `url` to the JSON listing and let you target a BYOC data plane with only an API key. Together they make a deploy-then-smoke-test step scriptable in CI without the UI.",
+      "why": "A deploy that cannot print its own URL cannot be smoke-tested automatically. This closes that gap.",
+      "code": {
+        "lang": "bash",
+        "src": "export LANGSMITH_API_KEY=...\nlanggraph deploy --config langgraph.json\nURL=$(langgraph deploy list --json | jq -r '.[0].url')\ncurl -s \"$URL/ok\"           # health check\ncurl -s \"$URL/assistants/search\" -X POST -d '{}' \\\n     -H \"x-api-key: $LANGSMITH_API_KEY\" | jq length"
+      }
+    },
+    {
+      "id": "2026-11-28-17",
+      "bucket": "next",
+      "type": "code",
+      "topic": "anthropic-custom-client",
+      "title": "Bring your own `httpx` client to `ChatAnthropic` — proxies, mTLS and pool limits in one place.",
+      "body": "langchain-anthropic 1.7.13 accepts caller-supplied HTTP and SDK clients. Build one `httpx.Client` with your corporate proxy, CA bundle and connection limits, and hand it in; the model class stops creating its own.",
+      "why": "Follows last week's lesson: a pool belongs to a client. Now you can own that client instead of fighting the default one.",
+      "code": {
+        "lang": "python",
+        "src": "import httpx\nfrom langchain_anthropic import ChatAnthropic\n\nhttp = httpx.Client(\n    proxy=\"http://proxy.corp:8080\",\n    verify=\"/etc/ssl/corp-ca.pem\",\n    limits=httpx.Limits(max_connections=20),\n    timeout=60,\n)\nllm = ChatAnthropic(model=\"claude-sonnet-4-5\", http_client=http)"
+      }
+    },
+    {
+      "id": "2026-11-28-18",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "mlflow-issue-detection",
+      "title": "MLflow 3.18's Issues tab clusters failing traces so you stop reading them one by one.",
+      "body": "Point it at an experiment and it groups recurring failure patterns — wrong tool, refusal, timeout — into issues linked back to example traces. Run it on demand or on a daily schedule. Needs a SQL-backed tracking server, not file-based.",
+      "why": "This is the MLflow answer to LangSmith Engine's 'issues' step: traces in, a ranked list of what is actually going wrong out."
+    },
+    {
+      "id": "2026-11-28-19",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "mlflow-skill-registry",
+      "title": "A skill registry versions agent *instructions* the way a model registry versions weights.",
+      "body": "MLflow 3.18 ships an experimental Skill Registry: register a skill folder from local disk, Git, OCI or ZIP, then pin it by version or by alias such as `production`. Agents resolve the alias at start-up, so promoting a skill is a pointer move, not a redeploy.",
+      "why": "Prompts, skills and models are all artefacts that change independently. Each needs its own alias-based promotion path."
+    },
+    {
+      "id": "2026-11-28-20",
+      "bucket": "next",
+      "type": "code",
+      "topic": "hitl-per-call",
+      "title": "`interrupt_mode=\"per_call\"` asks once *per tool call*, not once per turn.",
+      "body": "Default HITL batching pauses once with all pending tool calls in one interrupt. `per_call` pauses separately for each, so an approval UI can show one action at a time and resume each with its own decision.",
+      "why": "Batched approval is faster; per-call is safer when one turn mixes a harmless read with a dangerous write.",
+      "code": {
+        "lang": "python",
+        "src": "from langchain.agents import create_agent\nfrom langchain.agents.middleware import HumanInTheLoopMiddleware\n\nhitl = HumanInTheLoopMiddleware(\n    interrupt_on={\"delete_record\": True, \"send_email\": True},\n    interrupt_mode=\"per_call\",\n)\nagent = create_agent(model, tools=tools, middleware=[hitl],\n                     checkpointer=checkpointer)"
+      }
+    },
+    {
+      "id": "2026-11-28-21",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "mcp-tools",
+      "title": "To the agent, an MCP tool is just another `@tool` — the adapter does the translation.",
+      "body": "`MultiServerMCPClient` connects to one or more MCP servers, lists their tools and wraps each as a LangChain tool with the server's JSON schema as the argument schema. The ReAct loop cannot tell the difference. Newer LangChain also exposes this under `langchain.mcp` (beta).",
+      "why": "MCP is how you stop writing a bespoke wrapper for every SaaS. The trade: you now depend on the *server's* docstrings being good."
+    },
+    {
+      "id": "2026-11-28-22",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "tool-call-delta",
+      "title": "Since langchain-core 1.7, tool-call arguments stream as `tool-call-delta` events — upgrade the *client* first.",
+      "body": "Arguments used to arrive only when the tool call was complete. Now fragments stream as they are generated, which is what lets a UI show 'searching for: lang…' live. Consumers on older `langchain-core` or old UI packages drop the deltas, which is why the docs say upgrade clients before servers.",
+      "why": "Explains last week's `openai-stream-toolcall-args` fix: the streaming contract changed, and a few consumers lagged behind it."
+    },
+    {
+      "id": "2026-11-28-23",
+      "bucket": "next",
+      "type": "diagram",
+      "topic": "summarization-middleware",
+      "title": "Summarisation middleware is a valve before the model call: compress old turns, keep recent ones verbatim.",
+      "body": "When the running token count crosses a threshold, the middleware replaces older messages with one summary message and leaves the last N turns intact. It runs inside the agent loop, so you never write the 'summarise then wipe' node yourself.",
+      "diagram": {
+        "direction": "row",
+        "nodes": [
+          {
+            "id": "h",
+            "label": "full history"
+          },
+          {
+            "id": "c",
+            "label": "over budget?"
+          },
+          {
+            "id": "s",
+            "label": "summarise old turns"
+          },
+          {
+            "id": "m",
+            "label": "model call",
+            "kind": "terminal"
+          }
+        ],
+        "edges": [
+          [
+            "h",
+            "c"
+          ],
+          [
+            "c",
+            "s"
+          ],
+          [
+            "s",
+            "m"
+          ],
+          [
+            "c",
+            "m"
+          ]
+        ],
+        "caption": "Below budget: straight to the model. Above: compress first."
+      }
+    },
+    {
+      "id": "2026-11-28-24",
+      "bucket": "next",
+      "type": "concept",
+      "topic": "trajectory-evals",
+      "title": "Final-answer evals grade the destination; trajectory evals grade the route.",
+      "body": "A trajectory evaluator looks at the *sequence* of tool calls — did it search before answering, did it avoid the forbidden tool, how many steps. Exact-match trajectories are brittle; 'contains these calls in any order' or an LLM judge over the trace is the usual middle ground. LangSmith's trajectory rules now accept trace and tree filters.",
+      "why": "Two agents can both answer correctly while one made 40 calls and the other 4. Only trajectory metrics see that."
+    },
+    {
+      "id": "2026-11-28-25",
+      "bucket": "fresh",
+      "type": "concept",
+      "topic": "langsmith-sandbox-volumes",
+      "source": "https://docs.langchain.com/langsmith/changelog",
+      "title": "LangSmith Sandboxes gained *volumes* (beta) and `cp`/`ls` in the CLI.",
+      "body": "Volumes are persistent disks you create, list, clone and attach to sandboxes, so an agent's working files outlive one sandbox. `langsmith sandboxes cp` and `ls` move and inspect files, `--preserve-memory-on-stop` keeps RAM state, and `snapshot capture --include-memory` freezes a whole running sandbox.",
+      "why": "This turns a sandbox from a throwaway shell into a resumable workspace — the piece deep agents needed for multi-day coding tasks."
+    },
+    {
+      "id": "2026-11-28-26",
+      "bucket": "fresh",
+      "type": "diagram",
+      "topic": "langsmith-code-evaluators-default",
+      "source": "https://docs.langchain.com/langsmith/changelog",
+      "title": "Advanced code evaluators are now on by default — your Python runs in a sandbox next to the trace.",
+      "body": "No opt-in flag anymore on Cloud. Write a Python function, LangSmith runs it in an isolated sandbox against each sampled trace and writes the result back as feedback. On BYOC and self-hosted the switch is `SANDBOX_FEATURE_ENABLED`; the old `codeEvaluatorV2Enabled` field is ignored.",
+      "diagram": {
+        "direction": "row",
+        "nodes": [
+          {
+            "id": "t",
+            "label": "new trace"
+          },
+          {
+            "id": "r",
+            "label": "rule (sample %)"
+          },
+          {
+            "id": "s",
+            "label": "sandbox runs your .py"
+          },
+          {
+            "id": "f",
+            "label": "feedback on run",
+            "kind": "terminal"
+          }
+        ],
+        "edges": [
+          [
+            "t",
+            "r"
+          ],
+          [
+            "r",
+            "s"
+          ],
+          [
+            "s",
+            "f"
+          ]
+        ],
+        "caption": "Same shape as MLflow online scorers — different host."
+      }
+    },
+    {
+      "id": "2026-11-28-27",
+      "bucket": "fresh",
+      "type": "quiz",
+      "topic": "langsmith-user-groups-rename",
+      "source": "https://docs.langchain.com/langsmith/changelog",
+      "title": "Breaking: 'teams' are now 'user groups' in LangSmith — headers, tags and permissions all changed.",
+      "body": "Permissions moved to `organization:user-groups:*` / `workspaces:user-groups:*`, and gateway traces now carry `gateway.user_group_ids`. The `X-LangSmith-Team-Tags` header, `ls_team:` tags, gateway policies matching on `team_id`, and `gateway.team_ids` filters stop working.",
+      "quiz": {
+        "question": "After the rename, your cost dashboard that filters gateway traces by `gateway.team_ids` shows zero spend. What happened?",
+        "options": [
+          "The gateway stopped tracing",
+          "The field was renamed to `gateway.user_group_ids`; the old filter matches nothing",
+          "Your API key lost the `teams:*` permission so traces are hidden",
+          "Cost attribution moved to the agent record"
+        ],
+        "answer": 1,
+        "explain": "Traces are still written; the attribute key changed. Update the filter and any `team_id` gateway policies in the same pass, and replace `X-LangSmith-Team-Tags` headers in clients. Checking for renamed identifiers is step one of any breaking-change triage."
+      }
+    },
+    {
+      "id": "2026-11-28-28",
+      "bucket": "fresh",
+      "type": "concept",
+      "topic": "langsmith-training-optout",
+      "source": "https://www.aipolicydesk.com/blog/langsmith-terms-of-service-training-opt-out-december-1-2026",
+      "title": "Reported: LangSmith's standard terms change on 1 Dec — check the training opt-out and hide inputs regardless.",
+      "body": "A policy write-up (24 Nov) reads the new Standard Terms as allowing use of customer data to improve the platform unless you opt out in settings, for self-serve plans; enterprise terms reportedly keep the old no-training commitment. Verify against LangChain's own terms and FAQ. Either way, `LANGSMITH_HIDE_INPUTS` / `LANGSMITH_HIDE_OUTPUTS` or `hide_inputs=` callables keep payloads out of the vendor entirely.",
+      "why": "Data-residency questions come up in every enterprise agent review. The technical control (scrub before send) does not depend on reading the contract correctly."
+    },
+    {
+      "id": "2026-11-28-29",
+      "bucket": "fresh",
+      "type": "code",
+      "topic": "reasoning-effort-standard",
+      "source": "https://releasebot.io/updates/langchain-ai",
+      "title": "`reasoning_effort` is now a *standard* chat-model parameter in the LangChain monorepo (Nov 23 release wave).",
+      "body": "Instead of each provider inventing `thinking={...}` or `reasoning={...}`, you set one field at init and the provider class maps it. The same wave made OpenAI prompt caching explicit and shipped `langchain-ollama` 1.2.0 with thinking levels (needs ollama ≥ 0.6.3).",
+      "why": "Model routers and fallback middleware need provider-neutral knobs. Effort was the last big one that was not standardised.",
+      "code": {
+        "lang": "python",
+        "src": "from langchain.chat_models import init_chat_model\n\nfast = init_chat_model(\"openai:gpt-5-mini\", reasoning_effort=\"low\")\ndeep = init_chat_model(\"anthropic:claude-sonnet-4-5\", reasoning_effort=\"high\")\n\ndef pick(difficulty: str):\n    return deep if difficulty == \"hard\" else fast"
+      }
+    },
+    {
+      "id": "2026-11-28-30",
+      "bucket": "fresh",
+      "type": "concept",
+      "topic": "otel-span-metadata",
+      "source": "https://docs.langchain.com/langsmith/changelog",
+      "title": "`otel.span.*` metadata: OpenTelemetry attributes now ride into LangSmith as run metadata.",
+      "body": "When traces arrive through the OTel path, span attributes are copied onto the run under an `otel.span.` prefix, so you can filter LangSmith runs by `otel.span.http.route` or your own attributes. Self-hosted can turn it off with `OTEL_PASSTHROUGH_TO_METADATA_ENABLED=false`.",
+      "why": "If your platform team already tags OTel spans with tenant and region, you get those filters in LangSmith for free instead of re-tagging in code."
+    }
+  ]
+}
